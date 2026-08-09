@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>O05011 · native folded molecule (all atoms)</title>
+<style>
+  *{box-sizing:border-box} html,body{margin:0;height:100%;overflow:hidden;background:#0a0e13;color:#c7cdd6;font-family:'Segoe UI',system-ui,sans-serif}
+  #scene{position:fixed;inset:0}
+  #hud{position:fixed;left:20px;top:18px;z-index:5;font-size:12px;line-height:1.5;color:#8aa0b8}
+  #hud b{color:#eaf2fb} #hud .nm{font-size:15px;color:#eaf2fb;font-weight:600}
+  #foldwrap{position:fixed;right:20px;top:18px;z-index:5}
+  #foldbtn{background:#121a26;color:#bccadb;border:1px solid #25344b;border-radius:7px;padding:6px 12px;font:13px 'Segoe UI',system-ui;cursor:pointer}
+  #foldbtn:hover{border-color:#4f86c6}
+  #tip{position:fixed;pointer-events:none;background:#11161dEE;border:1px solid #2a3a52;border-radius:6px;padding:4px 8px;font:12px Consolas,monospace;color:#eaf2fb;display:none;z-index:9}
+</style>
+</head>
+<body>
+<script>
+  window.__err=function(m){let d=document.getElementById('eb');if(!d){d=document.createElement('div');d.id='eb';
+    d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#3a0d0d;color:#ffb4b4;font:12px monospace;padding:10px;white-space:pre-wrap;max-height:45vh;overflow:auto';(document.body||document.documentElement).appendChild(d);}d.textContent+=m+'\n';};
+  addEventListener('error',e=>window.__err('ERROR: '+(e.message||e.type)+(e.filename?(' @ '+e.filename.split('/').pop()+':'+e.lineno):'')));
+  addEventListener('unhandledrejection',e=>window.__err('REJECT: '+((e.reason&&e.reason.message)||e.reason)));
+</script>
+<div id="scene"></div>
+<div id="hud">
+  <a id="back" href="catalog.html" style="color:#5f86c6;text-decoration:none;font-size:12px;display:none">← library</a>
+  <div class="nm" id="pname">NqrB &middot; subunit B</div>
+  <span id="porg">Na⁺-translocating NADH–quinone reductase · <i>Haemophilus influenzae</i></span><br>
+  UniProt <b id="pacc">O05011</b><br>
+  <b id="cnt">…</b> &middot; native folded molecule
+</div>
+<div id="foldwrap"><button id="foldbtn">⟲ idealized chain</button></div>
+<div id="tip"></div>
+
+<script type="importmap">
+{ "imports": { "three":"https://esm.sh/three@0.160.0", "three/addons/":"https://esm.sh/three@0.160.0/examples/jsm/" }}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+const THREE_TO_ONE={ALA:'A',ARG:'R',ASN:'N',ASP:'D',CYS:'C',GLN:'Q',GLU:'E',GLY:'G',HIS:'H',ILE:'I',
+  LEU:'L',LYS:'K',MET:'M',MSE:'M',PHE:'F',PRO:'P',SER:'S',THR:'T',TRP:'W',TYR:'Y',VAL:'V'};
+const AA_NAME={A:'Alanine',R:'Arginine',N:'Asparagine',D:'Aspartate',C:'Cysteine',Q:'Glutamine',E:'Glutamate',G:'Glycine',H:'Histidine',I:'Isoleucine',L:'Leucine',K:'Lysine',M:'Methionine',F:'Phenylalanine',P:'Proline',S:'Serine',T:'Threonine',W:'Tryptophan',Y:'Tyrosine',V:'Valine',X:'Unknown'};
+const AA_HEX={A:'#77c66e',C:'#f2d24b',D:'#e85d5d',E:'#ff7e5a',F:'#b98cff',G:'#9aa4ad',H:'#57c2a8',I:'#d6a85c',K:'#4f93ff',L:'#e0b15c',M:'#c9a05b',N:'#5cc4d6',P:'#c78fe0',Q:'#6aa9e0',R:'#3f7dff',S:'#74d0a2',T:'#5fc0b2',V:'#d2b46a',W:'#a377e6',Y:'#d98fc6',X:'#8aa0b8'};
+const AA_NUM={}; for(const k in AA_HEX) AA_NUM[k]=parseInt(AA_HEX[k].slice(1),16);
+// element van-der-Waals radii (Å) for the space-fill look
+const ELEM={C:1.70,N:1.55,O:1.52,S:1.80,P:1.80,H:1.20,_:1.60};
+// CPK element colours — the universal molecular-viewer scheme
+const ELEMC={C:0x9aa3ad,N:0x3b6cff,O:0xff4d4d,S:0xf5d020,P:0xff9b3d,H:0xe8edf2,_:0xc9b88a};
+const SF=0.82;   // space-fill scale: <1 keeps atoms distinct, still fused
+
+const sceneEl=document.getElementById('scene');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(Math.min(1.5,devicePixelRatio));
+sceneEl.appendChild(renderer.domElement);   // no tone-mapping — rudimentary/linear
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x0a0e13);
+const cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,6000);
+// rudimentary scheme: ambient + a headlight locked to the camera → molecule shades the same as you rotate
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+const key=new THREE.DirectionalLight(0xffffff,1.0); cam.add(key); key.position.set(0,0,0);
+cam.add(key.target); key.target.position.set(0,0,-1); scene.add(cam);
+const controls=new OrbitControls(cam,renderer.domElement); controls.enableDamping=true; controls.autoRotate=true; controls.autoRotateSpeed=0.6;
+const group=new THREE.Group(); scene.add(group);
+
+let A=[], inst=null, M=0, foldF=1, foldTarget=1;   // A = atoms; 1=native fold, 0=idealized chain
+let line=null, linePos=null, caList=[];            // backbone Cα trace (per residue)
+const m4=new THREE.Matrix4(), v3=new THREE.Vector3(), col=new THREE.Color();
+
+function paint(){
+  const e = foldF<=0?0:(foldF>=1?1:foldF*foldF*(3-2*foldF));   // idealized chain ↔ native fold
+  for(let i=0;i<M;i++){ const a=A[i];
+    const px=a.ex+(a.fx-a.ex)*e, py=a.ey+(a.fy-a.ey)*e, pz=a.ez+(a.fz-a.ez)*e;
+    m4.makeScale(a.r,a.r,a.r); m4.setPosition(v3.set(px,py,pz)); inst.setMatrixAt(i,m4);
+    col.set(a.c); inst.setColorAt(i,col); }
+  inst.instanceMatrix.needsUpdate=true; inst.instanceColor.needsUpdate=true;
+  if(line){ for(let j=0;j<caList.length;j++){ const a=caList[j];
+      linePos[j*3]=a.ex+(a.fx-a.ex)*e; linePos[j*3+1]=a.ey+(a.fy-a.ey)*e; linePos[j*3+2]=a.ez+(a.fz-a.ez)*e; }
+    line.geometry.attributes.position.needsUpdate=true; }
+}
+
+const foldbtn=document.getElementById('foldbtn');
+foldbtn.onclick=()=>{ foldTarget = foldTarget>0.5?0:1; foldbtn.textContent = foldTarget>0.5?'⟲ idealized chain':'⟲ fold to native'; };
+
+// hover → residue + atom
+const ray=new THREE.Raycaster(), mouse=new THREE.Vector2(), tip=document.getElementById('tip');
+addEventListener('pointermove',ev=>{ if(!inst) return;
+  mouse.x=(ev.clientX/innerWidth)*2-1; mouse.y=-(ev.clientY/innerHeight)*2+1; ray.setFromCamera(mouse,cam);
+  const h=ray.intersectObject(inst)[0];
+  if(h){ const a=A[h.instanceId];
+    tip.style.display='block'; tip.style.left=(ev.clientX+12)+'px'; tip.style.top=(ev.clientY+12)+'px';
+    tip.textContent=a.resi+'  '+(AA_NAME[a.code]||'')+' ('+a.name+') · '+a.atom; }
+  else tip.style.display='none'; });
+
+function frame(){ requestAnimationFrame(frame);
+  if(inst && Math.abs(foldF-foldTarget)>0.001){ foldF += (foldTarget-foldF)*0.06; if(Math.abs(foldF-foldTarget)<0.002) foldF=foldTarget; paint(); }
+  controls.update(); renderer.render(scene,cam); }
+
+const P=new URLSearchParams(location.search), ACC=P.get('acc'), NAME=P.get('name');
+if(ACC){ document.getElementById('back').style.display='inline-block';
+  document.getElementById('pname').innerHTML = NAME || ACC;
+  document.getElementById('porg').innerHTML = '<i>Homo sapiens</i>';
+  document.getElementById('pacc').textContent = ACC; }
+async function loadPDB(){
+  if(!ACC) return (await fetch('O05011_af.pdb')).text();
+  const local=await fetch('structures/'+ACC+'.pdb'); if(local.ok) return local.text();   // cached
+  const meta=await (await fetch('https://alphafold.ebi.ac.uk/api/prediction/'+ACC)).json();  // on-demand
+  return (await fetch(meta[0].pdbUrl)).text();
+}
+loadPDB().then(pdb=>{
+  const raw=[], caF={}, resList=[], seen=new Set();
+  for(const ln of pdb.split('\n')) if(ln.startsWith('ATOM')){
+    const atom=ln.slice(12,16).trim(), resName=ln.slice(17,20).trim(), resi=parseInt(ln.slice(22,26));
+    let el=ln.slice(76,78).trim().toUpperCase(); if(!el) el=(atom[0]||'C');
+    const x=parseFloat(ln.slice(30,38)), y=parseFloat(ln.slice(38,46)), z=parseFloat(ln.slice(46,54));
+    const code=THREE_TO_ONE[resName]||'X';
+    const a={x,y,z,el,resi,code,name:resName,atom,r:(ELEM[el]||ELEM._)*SF,c:(ELEMC[el]??ELEMC._)};
+    raw.push(a);
+    if(atom==='CA' && !seen.has(resi)){ seen.add(resi); resList.push(resi); caF[resi]=a; }
+  }
+  // centre on atom centroid
+  let cx=0,cy=0,cz=0; for(const a of raw){cx+=a.x;cy+=a.y;cz+=a.z;} cx/=raw.length;cy/=raw.length;cz/=raw.length;
+  let maxd=0; for(const a of raw){ a.fx=a.x-cx;a.fy=a.y-cy;a.fz=a.z-cz; maxd=Math.max(maxd,Math.hypot(a.fx,a.fy,a.fz)); }
+
+  // idealized chain: a loose 3-D coil over residues; each residue carries its real atom cluster
+  const hr=n=>{const v=Math.sin(n*127.1+0.7)*43758.5453;return v-Math.floor(v);};
+  let dx=1,dy=0,dz=0,wx=0,wy=0,wz=0; const coil={};
+  for(let i=0;i<resList.length;i++){ const ri=resList[i];
+    dx+=(hr(i)*2-1)*0.6; dy+=(hr(i+11)*2-1)*0.6; dz+=(hr(i+23)*2-1)*0.6;
+    const L=Math.hypot(dx,dy,dz)||1; dx/=L;dy/=L;dz/=L; wx+=dx*3.8; wy+=dy*3.8; wz+=dz*3.8;
+    coil[ri]={x:wx,y:wy,z:wz}; }
+  // centre + scale the coil to share the camera with the fold
+  let mx=0,my=0,mz=0; for(const ri of resList){const c=coil[ri];mx+=c.x;my+=c.y;mz+=c.z;} mx/=resList.length;my/=resList.length;mz/=resList.length;
+  let ext=1; for(const ri of resList){const c=coil[ri]; c.x-=mx;c.y-=my;c.z-=mz; ext=Math.max(ext,Math.hypot(c.x,c.y,c.z));}
+  const csc=(maxd*1.5)/ext; for(const ri of resList){const c=coil[ri]; c.x*=csc;c.y*=csc;c.z*=csc;}
+  // each atom's coil position = its residue's coil location + the atom's real offset from its Cα
+  for(const a of raw){ const ca=caF[a.resi]||{fx:a.fx,fy:a.fy,fz:a.fz}; const c=coil[a.resi]||{x:a.fx,y:a.fy,z:a.fz};
+    a.ex=c.x+(a.fx-ca.fx); a.ey=c.y+(a.fy-ca.fy); a.ez=c.z+(a.fz-ca.fz); }
+
+  A=raw; M=A.length; caList=resList.map(ri=>caF[ri]);
+  document.getElementById('cnt').textContent=resList.length+' residues · '+M+' atoms';
+
+  const geo=new THREE.SphereGeometry(1,16,12);
+  const mat=new THREE.MeshLambertMaterial({color:0xffffff});   // rudimentary diffuse
+  inst=new THREE.InstancedMesh(geo,mat,M); group.add(inst);
+  linePos=new Float32Array(caList.length*3);
+  const lg=new THREE.BufferGeometry(); lg.setAttribute('position',new THREE.BufferAttribute(linePos,3));
+  line=new THREE.Line(lg, new THREE.LineBasicMaterial({color:0x8593a3,transparent:true,opacity:0.4}));
+  group.add(line);
+  cam.position.set(0,0,maxd*2.6); cam.lookAt(0,0,0); controls.target.set(0,0,0);
+  paint(); requestAnimationFrame(frame);
+});
+addEventListener('resize',()=>{ cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+</script>
+</body>
+</html>

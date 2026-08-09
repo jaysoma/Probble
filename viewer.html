@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>FoldView · structure viewer</title>
+<style>
+  :root{ --bg:#0a0e13; --panel:#0e141d; --line:#1d2735; --text:#c7cdd6; --muted:#7488a0; --acc:#46d1a0; }
+  *{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:'Segoe UI',system-ui,sans-serif}
+  header{position:relative;z-index:5;background:#0a0e13ee;border-bottom:1px solid var(--line);
+    padding:10px 18px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  header a.back{color:var(--muted);text-decoration:none;font-size:13px}
+  header a.back:hover{color:#eaf2fb}
+  header h1{margin:0;font-size:15px;font-weight:600;color:#eaf2fb}
+  header h1 span{color:var(--muted);font:12px Consolas,monospace;margin-left:8px}
+  .ctl{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+  select{background:#121a26;border:1px solid #25344b;border-radius:7px;padding:6px 9px;color:#eaf2fb;
+    font:13px 'Segoe UI',system-ui;outline:none}
+  input[type=checkbox]{accent-color:var(--acc);width:14px;height:14px}
+  label{cursor:pointer;user-select:none}
+  #legend{display:none;gap:10px;font:11.5px Consolas,monospace;color:var(--muted);align-items:center}
+  #legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+  #stage{position:absolute;inset:56px 0 0 0}
+  #mol{width:100%;height:100%}
+  #msg{position:absolute;top:70px;left:20px;z-index:4;font:13px Consolas,monospace;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="catalog.html">← library</a>
+  <h1 id="ttl">structure <span id="acc"></span></h1>
+  <div class="ctl"><label for="view">view</label>
+    <select id="view">
+      <option value="spheres">Spheres</option>
+      <option value="cartoon">Cartoon</option>
+      <option value="ballstick">Ball &amp; stick</option>
+    </select></div>
+  <div class="ctl"><input type="checkbox" id="conf" checked/>
+    <label for="conf" title="AlphaFold pLDDT confidence drives per-atom opacity (sphere view)">confidence fade</label></div>
+  <div class="ctl"><input type="checkbox" id="dark"/><label for="dark">dark canvas</label></div>
+  <div class="ctl"><input type="checkbox" id="spin"/><label for="spin">spin</label></div>
+  <div id="legend" class="ctl">
+    <span><i style="background:#7a9cc4;opacity:1"></i>pLDDT ≥ 90 solid</span>
+    <span><i style="background:#7a9cc4;opacity:.75"></i>70–90</span>
+    <span><i style="background:#7a9cc4;opacity:.4"></i>50–70</span>
+    <span><i style="background:#7a9cc4;opacity:.15"></i>&lt; 50 ghost</span>
+  </div>
+</header>
+<div id="stage"><div id="mol"></div></div>
+<div id="msg">loading…</div>
+
+<!-- OUR build: per-atom sphere opacity (3Dmol.js issue #166 work) lives in this bundle -->
+<script src="3Dmol-dev.js"></script>
+<script>
+const P = new URLSearchParams(location.search);
+const ACC = (P.get('acc') || 'O05011').toUpperCase();
+const NAME = P.get('name') || '';
+document.getElementById('acc').textContent = ACC;
+if (NAME) document.getElementById('ttl').firstChild.textContent = NAME + ' ';
+
+const LIGHT_BG = 'white', DARK_BG = '#0a0e13';
+let viewer = null, plddtBins = null;   // bins: {solid:[resi], high:[], low:[], ghost:[]}
+
+function msg(t){ const m=document.getElementById('msg'); m.textContent=t||''; m.style.display=t?'block':'none'; }
+
+// pLDDT rides the B-factor column of every AlphaFold model, per residue.
+function binByPlddt(model){
+  const bins = { solid:new Set(), high:new Set(), low:new Set(), ghost:new Set() };
+  model.selectedAtoms({}).forEach(a => {
+    const b = a.b === undefined ? 100 : a.b;
+    (b >= 90 ? bins.solid : b >= 70 ? bins.high : b >= 50 ? bins.low : bins.ghost).add(a.resi);
+  });
+  return Object.fromEntries(Object.entries(bins).map(([k,v]) => [k, Array.from(v)]));
+}
+
+function applyStyle(){
+  const mode = document.getElementById('view').value;
+  const fade = document.getElementById('conf').checked;
+  const sphereView = mode === 'spheres';
+  document.getElementById('conf').disabled = !sphereView;
+  document.getElementById('legend').style.display = (sphereView && fade) ? 'flex' : 'none';
+
+  if (mode === 'cartoon') {
+    viewer.setStyle({}, { cartoon: { color: 'spectrum', thickness: 0.55, arrows: true } });
+  } else if (mode === 'ballstick') {
+    viewer.setStyle({}, { stick: { radius: 0.15 }, sphere: { scale: 0.22 } });
+  } else if (!fade) {
+    viewer.setStyle({}, { sphere: { scale: 0.35 } });
+  } else {
+    // Per-atom opacity by AlphaFold confidence -- the render shows what the model is
+    // sure of. Requires per-atom sphere opacity (our 3Dmol.js issue #166 build).
+    viewer.setStyle({}, { sphere: { scale: 0.35, opacity: 0.15 } });          // <50: ghost
+    if (plddtBins.low.length)   viewer.addStyle({ resi: plddtBins.low },   { sphere: { opacity: 0.4 } });
+    if (plddtBins.high.length)  viewer.addStyle({ resi: plddtBins.high },  { sphere: { opacity: 0.75 } });
+    if (plddtBins.solid.length) viewer.addStyle({ resi: plddtBins.solid }, { sphere: { opacity: 1.0 } });
+  }
+  viewer.render();
+}
+
+function boot(pdb){
+  viewer = $3Dmol.createViewer(document.getElementById('mol'),
+      { backgroundColor: LIGHT_BG, antialias: true });
+  const model = viewer.addModel(pdb, 'pdb');
+  plddtBins = binByPlddt(model);
+  applyStyle();
+  viewer.zoomTo();
+  viewer.render();
+  msg('');
+  document.getElementById('view').addEventListener('change', applyStyle);
+  document.getElementById('conf').addEventListener('change', applyStyle);
+  document.getElementById('dark').addEventListener('change', e => {
+    viewer.setBackgroundColor(e.target.checked ? DARK_BG : LIGHT_BG); viewer.render(); });
+  document.getElementById('spin').addEventListener('change', e => viewer.spin(e.target.checked));
+}
+
+// local library first; unknown accessions come straight from the AlphaFold DB
+fetch('structures/' + ACC + '.pdb')
+  .then(r => { if (!r.ok) throw 0; return r.text(); })
+  .catch(() => {
+    msg('not in local library — fetching from AlphaFold DB…');
+    return fetch('https://alphafold.ebi.ac.uk/files/AF-' + ACC + '-F1-model_v4.pdb')
+      .then(r => { if (!r.ok) throw new Error('AlphaFold DB has no ' + ACC); return r.text(); });
+  })
+  .then(boot)
+  .catch(e => msg(String(e.message || e)));
+</script>
+</body>
+</html>

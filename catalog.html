@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AlphaFold structure library · by fold class</title>
+<style>
+  :root{ --bg:#0a0e13; --panel:#0e141d; --line:#1d2735; --text:#c7cdd6; --muted:#7488a0;
+         --a:#ff7e5a; --b:#4f9bff; --ab:#46d1a0; --few:#8aa0b8; }
+  *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#0a0e13ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:16px 28px}
+  header h1{margin:0;font-size:17px;font-weight:600;color:#eaf2fb}
+  header .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  #q{margin-top:11px;width:100%;max-width:520px;background:#121a26;border:1px solid #25344b;border-radius:8px;
+     padding:9px 13px;color:#eaf2fb;font:14px 'Segoe UI',system-ui;outline:none}
+  #q:focus{border-color:#4f86c6}
+  #q::placeholder{color:#5f7388}
+  #featured{padding:18px 28px 4px}
+  #featured .fhead{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#7488a0;margin-bottom:10px}
+  .fcard{display:block;text-decoration:none;color:inherit;background:#13233a;border:1px solid #2f4f7f;
+    border-left:4px solid #49d18a;border-radius:10px;padding:14px 16px;max-width:560px;transition:border-color .12s}
+  .fcard:hover{border-color:#49d18a}
+  .fcard .nm{font-size:15px;color:#eaf2fb;font-weight:600;display:flex;align-items:center;gap:10px}
+  .fcard .badge{font:11px Consolas,monospace;color:#49d18a;border:1px solid #2c5a44;border-radius:5px;padding:2px 7px}
+  .fcard .meta{margin-top:6px;font:12px Consolas,monospace;color:#7488a0} .fcard .meta b{color:#9fb3c8}
+  main{padding:8px 28px 60px}
+  .grp{margin-top:26px}
+  .grp h2{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;margin:0 0 12px;display:flex;align-items:center;gap:10px}
+  .grp h2 .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .grp h2 .ct{color:var(--muted);font-size:12px;letter-spacing:0;text-transform:none}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:11px}
+  .card{display:block;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);
+        border-left-width:4px;border-radius:9px;padding:11px 13px;cursor:pointer;transition:border-color .12s,transform .08s}
+  .card:hover{border-color:#3a567f;transform:translateY(-1px)}
+  .card .nm{font-size:13.5px;color:#eaf2fb;line-height:1.35;max-height:2.7em;overflow:hidden}
+  .card .meta{margin-top:7px;font:11.5px Consolas,monospace;color:var(--muted);display:flex;justify-content:space-between}
+  .card .meta b{color:#9fb3c8;font-weight:600}
+  #empty{color:var(--muted);padding:30px 0;display:none}
+  #empty b{color:#eaf2fb}
+</style>
+</head>
+<body>
+<header>
+  <h1>AlphaFold structure library</h1>
+  <div class="sub" id="sub">loading…</div>
+  <input id="q" placeholder="search by name…  or type any UniProt accession (e.g. P69905) to open it" autocomplete="off" spellcheck="false"/>
+</header>
+<!-- The "step the paper" DPAM walkthrough (paper.html) is retired from the app flow
+     (2026-08-09): FoldView is a protein renderer now. The file remains on disk. -->
+<main id="main"></main>
+<div id="empty" style="padding:0 28px"><b id="qval"></b> isn't in the library — looks like an accession; opening it on-demand…</div>
+
+<script>
+const CLS = [
+  {key:'Mainly alpha', label:'Mainly α', varc:'--a'},
+  {key:'Mainly beta',  label:'Mainly β', varc:'--b'},
+  {key:'Alpha + beta', label:'α + β',    varc:'--ab'},
+  {key:'Few SS',       label:'Few SS',   varc:'--few'},
+];
+const ACC_RE = /^[A-NR-Z][0-9][A-Z0-9]{3}[0-9]$|^[OPQ][0-9][A-Z0-9]{3}[0-9]$/i;
+let ROWS = [];
+
+function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function card(r){
+  const a=document.createElement('a'); a.className='card';
+  a.style.borderLeftColor = cssv((CLS.find(c=>c.key===r.cls)||CLS[3]).varc);
+  a.href = 'viewer.html?acc='+encodeURIComponent(r.acc)+'&name='+encodeURIComponent(r.name);
+  a.innerHTML = '<div class="nm">'+r.name+'</div><div class="meta"><b>'+r.acc+'</b><span>'+r.len+' aa</span></div>';
+  return a;
+}
+function render(filter){
+  const main=document.getElementById('main'); main.innerHTML='';
+  const f=(filter||'').trim().toLowerCase();
+  let shown=0;
+  for(const c of CLS){
+    const rows=ROWS.filter(r=>r.cls===c.key && (!f || r.name.toLowerCase().includes(f) || r.acc.toLowerCase().includes(f)));
+    if(!rows.length) continue;
+    shown+=rows.length;
+    const g=document.createElement('div'); g.className='grp';
+    g.innerHTML='<h2><span class="dot" style="background:'+cssv(c.varc)+'"></span>'+c.label+' <span class="ct">'+rows.length+'</span></h2>';
+    const grid=document.createElement('div'); grid.className='grid';
+    rows.forEach(r=>grid.appendChild(card(r)));
+    g.appendChild(grid); main.appendChild(g);
+  }
+  // accession-lookup affordance: no name matches but the query looks like an accession
+  const emp=document.getElementById('empty');
+  if(!shown && ACC_RE.test(f)){ emp.style.display='block'; document.getElementById('qval').textContent=f.toUpperCase(); }
+  else emp.style.display='none';
+}
+
+const q=document.getElementById('q');
+q.addEventListener('input',()=>render(q.value));
+q.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ const v=q.value.trim().toUpperCase();
+    if(ACC_RE.test(v)){ location.href='viewer.html?acc='+encodeURIComponent(v); } }
+});
+
+fetch('catalog.json').then(r=>r.json()).then(rows=>{
+  ROWS=rows;
+  const by={}; CLS.forEach(c=>by[c.key]=0); rows.forEach(r=>by[r.cls]=(by[r.cls]||0)+1);
+  document.getElementById('sub').textContent =
+    rows.length+' human proteins · organized by fold class · '+
+    CLS.map(c=>by[c.key]+' '+c.label).join('  ·  ');
+  render('');
+});
+</script>
+</body>
+</html>
