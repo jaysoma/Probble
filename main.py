@@ -2,10 +2,13 @@
 """
 FoldView — AlphaFold structure library + protein renderer.
 
-The renderer (viewer.html) runs on a locally-built 3Dmol.js (3Dmol-dev.js) carrying the
-per-atom sphere opacity feature (upstream issue #166); the confidence-fade view maps each
-residue's pLDDT (the B-factor column of every AlphaFold model) onto per-atom opacity.
-(The retired DPAM "step the paper" walkthrough, paper.html, remains on disk unlinked.)
+Landing (catalog.html) is the browse-by-fold-class library; every card opens explore.html,
+the four-tab renderer (Explore / Assemble / Fold / Atoms). It runs on a locally-built
+3Dmol.js (3Dmol-dev.js) carrying the per-atom sphere opacity feature (upstream issue #166):
+the "spheres · confidence" representation maps each residue's pLDDT (the B-factor column of
+every AlphaFold model) onto per-atom opacity. The DPAM "step the paper" walkthrough this app
+began as was stripped 2026-08-09 — git 41caa40 has it whole. viewer.html and alphatest.html
+are unlinked dev/test pages.
 
 A static app behind the portfolio gateway (GithubRoot/app.py). The gateway
 reverse-proxies /foldview/* -> 127.0.0.1:<PORT>/* (prefix stripped), so every

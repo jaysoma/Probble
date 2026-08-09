@@ -45,8 +45,8 @@
   <div class="sub" id="sub">loading…</div>
   <input id="q" placeholder="search by name…  or type any UniProt accession (e.g. P69905) to open it" autocomplete="off" spellcheck="false"/>
 </header>
-<!-- The "step the paper" DPAM walkthrough (paper.html) is retired from the app flow
-     (2026-08-09): FoldView is a protein renderer now. The file remains on disk. -->
+<!-- The "step the paper" DPAM walkthrough was stripped 2026-08-09 (git 41caa40 has it whole);
+     its page lives on as explore.html — the four-tab renderer every card opens. -->
 <main id="main"></main>
 <div id="empty" style="padding:0 28px"><b id="qval"></b> isn't in the library — looks like an accession; opening it on-demand…</div>
 
@@ -64,7 +64,7 @@ function cssv(v){ return getComputedStyle(document.documentElement).getPropertyV
 function card(r){
   const a=document.createElement('a'); a.className='card';
   a.style.borderLeftColor = cssv((CLS.find(c=>c.key===r.cls)||CLS[3]).varc);
-  a.href = 'viewer.html?acc='+encodeURIComponent(r.acc)+'&name='+encodeURIComponent(r.name);
+  a.href = 'explore.html?acc='+encodeURIComponent(r.acc)+'&name='+encodeURIComponent(r.name);
   a.innerHTML = '<div class="nm">'+r.name+'</div><div class="meta"><b>'+r.acc+'</b><span>'+r.len+' aa</span></div>';
   return a;
 }
@@ -92,7 +92,7 @@ const q=document.getElementById('q');
 q.addEventListener('input',()=>render(q.value));
 q.addEventListener('keydown',e=>{
   if(e.key==='Enter'){ const v=q.value.trim().toUpperCase();
-    if(ACC_RE.test(v)){ location.href='viewer.html?acc='+encodeURIComponent(v); } }
+    if(ACC_RE.test(v)){ location.href='explore.html?acc='+encodeURIComponent(v); } }
 });
 
 fetch('catalog.json').then(r=>r.json()).then(rows=>{
