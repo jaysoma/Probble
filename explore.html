@@ -222,19 +222,68 @@ function styleCartoon(revealMax){
 // mapped from pLDDT -- runs on our local 3Dmol build (upstream issue #166 work); stock 3Dmol
 // cannot draw this. Residues group by (colour × opacity band) so the style-call count stays
 // small for every scheme except spectrum (per-residue colours; still one geometry rebuild).
-function styleSpheres(){ if(!viewer) return;
+function styleSpheres(revealSet, transCap){ if(!viewer) return;
   viewer.setStyle({model:COIL}, {});
   viewer.setStyle({model:FOLD}, {});
   const groups=new Map();
   for(let r=minResi;r<=maxResi;r++){ if(!(r in res2code)) continue;
+    if(revealSet && !revealSet.has(r)) continue;   // entrance reveal: only residues the sweep has reached
     const col=(activeMode()==='spectrum') ? rainbowHex((res2order[r]||0)/Math.max(1,N-1)) : resColor(r);
-    const a=confA(res2plddt[r]||100);
+    // transCap (fade-in setup): cap opacity below 1 so EVERY atom routes to the translucent
+    // twin -- the fade then owns the real alphas by mutating the twin's alphaArray in place
+    const a = transCap ? Math.min(confA(res2plddt[r]||100), transCap) : confA(res2plddt[r]||100);
     const key=col+'|'+a;
     if(!groups.has(key)) groups.set(key,{col,a,list:[]});
     groups.get(key).list.push(r); }
   for(const g of groups.values())
     viewer.addStyle({model:FOLD,resi:g.list}, {sphere:{scale:0.35, color:hex(g.col), opacity:g.a}});
   viewer.render();
+}
+// Protein-view entrance: a radial FADE-IN -- every atom ramps from invisible to its ACTUAL
+// confidence opacity (its ceiling), centre-out from the molecule's centroid. One geometry
+// rebuild total: all atoms are styled just under opaque (cap 0.02) so they land in the fork's
+// translucent twin, then each frame mutates the twin's alphaArray in place and re-uploads
+// (colorsNeedUpdate -> setBuffers; buffersNeedUpdate is reset-but-never-read in the fossil).
+// No per-frame rebuilds -- this is the alphaArray channel driven as an animation surface.
+// Quad k maps to atoms[k]: createMolObj walks atoms in model order and here every atom is
+// sphere-styled translucent, so twin quads mirror the atom list 1:1 (guarded by length check).
+let sphRevealTok=0;
+function runSphereReveal(sec){
+  if(!viewer) return;
+  const model=viewer.getModel(FOLD), atoms=model?model.selectedAtoms({}):[];
+  if(!atoms.length){ styleSpheres(); return; }
+  const tok=++sphRevealTok;
+  // radial order: each residue's distance from the centroid of residue means, normalized 0..1
+  const acc=new Map();
+  for(const a of atoms){ let m=acc.get(a.resi); if(!m){ m={x:0,y:0,z:0,n:0}; acc.set(a.resi,m); } m.x+=a.x;m.y+=a.y;m.z+=a.z;m.n++; }
+  let cx=0,cy=0,cz=0;
+  for(const m of acc.values()){ cx+=m.x/m.n; cy+=m.y/m.n; cz+=m.z/m.n; }
+  cx/=acc.size||1; cy/=acc.size||1; cz/=acc.size||1;
+  const dist=new Map(); let dmax=1e-9;
+  for(const [resi,m] of acc){ const dx=m.x/m.n-cx, dy=m.y/m.n-cy, dz=m.z/m.n-cz;
+    const d=Math.sqrt(dx*dx+dy*dy+dz*dz); dist.set(resi,d); if(d>dmax) dmax=d; }
+  styleSpheres(undefined, 0.02);   // the ONE rebuild: everything in the twin, near-invisible
+  let ga=null;   // reach into the live twin geometry (our fork marks it with geometry.alpha)
+  try{
+    const mesh=(model.molObj&&model.molObj.children||[]).find(c=>c.geometry&&c.geometry.alpha);
+    const grp=mesh&&mesh.geometry.geometryGroups[0];
+    if(grp&&grp.alphaArray&&grp.alphaArray.length>=atoms.length*4) ga={geo:mesh.geometry,arr:grp.alphaArray};
+  }catch(e){}
+  if(!ga){ styleSpheres(); return; }   // internals not as expected → settle instantly, still correct
+  const M=atoms.length, ord=new Float32Array(M), ceil=new Float32Array(M);
+  for(let k=0;k<M;k++){ ord[k]=(dist.get(atoms[k].resi)||0)/dmax; ceil[k]=confA(res2plddt[atoms[k].resi]||100); }
+  const RAMP=0.18, DUR=(sec||2.6)*1000, t0=performance.now();
+  const frame=()=>{ if(tok!==sphRevealTok || curTab!=='explore') return;   // superseded / tab left
+    const sweep=((performance.now()-t0)/DUR)*(1+RAMP);
+    const arr=ga.arr;
+    for(let k=0;k<M;k++){ let x=(sweep-ord[k])/RAMP; x=x<0?0:(x>1?1:x);
+      const a=ceil[k]*x*x*(3-2*x), o=k*4; arr[o]=a; arr[o+1]=a; arr[o+2]=a; arr[o+3]=a; }
+    ga.geo.colorsNeedUpdate=true;   // the flag updateObject actually reads → setBuffers re-upload
+    viewer.render();
+    if(sweep<1+RAMP){ requestAnimationFrame(frame); }
+    else { styleSpheres(); }   // settle: real opaque/twin split at true opacities
+  };
+  frame();
 }
 // Original-structure tab: show the unfolded coil model (traced tube, N→C spectrum), hide the fold
 function showCoil(){ if(!viewer) return;
@@ -315,7 +364,7 @@ function showTab(which){
   } else {                                 // Protein: space-filling spheres, confidence as opacity
     stopPoints();
     document.getElementById('mol').style.display='block'; document.getElementById('simwrap').style.display='none';
-    if(viewer){ viewer.zoomTo({model:FOLD},400); styleSpheres(); }
+    if(viewer){ viewer.zoomTo({model:FOLD},400); runSphereReveal(); }
   }
   updateLegend();
 }
@@ -328,7 +377,7 @@ cmodeSel.onchange=()=>{ colorMode=cmodeSel.value;
   if(curTab==='atoms'){ setPointColors(); }                                              // recolor the all-atom cloud
   else if(curTab==='fold'){ setPointColors(); if(pv){ pv.foldF=0; pv.foldPlaying=true; } }   // colour change → re-run the fold
   else if(curTab==='asm'){ setPointColors(); resetAssemble(); asmPlaying=true; }         // recolor + replay the assemble
-  else { styleSpheres(); }                                                               // Protein: restyle the spheres
+  else { runSphereReveal(); }                                                            // Protein: restyle via the front-to-back sweep
   updateLegend(); };
 
 // header — UniProt names arrive as "Recommended (alt1) (alt2) (…)"; show only the primary,
@@ -410,8 +459,10 @@ function setConfOn(v){ for(const sh of [pvSH,bondSH]) if(sh&&sh.uniforms&&sh.uni
 function startPoints(){ if(!pv) return; cancelAnimationFrame(pvRAF);
   const loop=()=>{ if(pv.controls) pv.controls.update();
     if(pv.asmPoint){                               // Assemble: reveal atoms N→C as the cursor walks the sequence
-      if(asmPlaying){ buildF+=N/(ASM_SECONDS*60); if(buildF>=N){ buildF=N; asmPlaying=false; } }
-      const rv=Math.min(1.05, buildF/Math.max(1,N-1));
+      // run past N so uReveal reaches 1.2: the last bead (arad 1.0) only finishes its
+      // 0.16-wide smoothstep ramp at 1.16 -- capping near 1.0 left the tail beads stunted
+      if(asmPlaying){ buildF+=N/(ASM_SECONDS*60); if(buildF>=N*1.2){ buildF=N*1.2; asmPlaying=false; } }
+      const rv=Math.min(1.2, buildF/Math.max(1,N-1));
       if(pvSH) pvSH.uniforms.uReveal.value=rv; if(bondSH) bondSH.uniforms.uReveal.value=rv; updateCursor(); }
     else if(pv.foldMode){ if(pv.foldPlaying){ pv.foldF=Math.min(1,pv.foldF+0.006); if(pv.foldF>=1) pv.foldPlaying=false; }
       foldTo(pv.foldF*pv.foldF*(3-2*pv.foldF)); }   // coil → native morph
