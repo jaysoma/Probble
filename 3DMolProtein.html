@@ -526,8 +526,19 @@ function setWobbleCoords(t, md){
     a.x=wobbleX0[b]+dx; a.y=wobbleX0[b+1]+dy; a.z=wobbleX0[b+2]+dz; }
 }
 // One frame: update + one draw.
+// Seconds spent travelling from one model to the next at 1x. Cutting straight from model to model on
+// every animation frame made a 10-model NMR set shake (Jay, 2026-11-24: "just vibrated violently").
+const ENS_GLIDE_S=0.9;
+function setEnsembleCoords(t){
+  const X=ENSEMBLE.xyz, K=X.length, ph=t/ENS_GLIDE_S, k=Math.floor(ph)%K, k2=(k+1)%K;
+  let f=ph-Math.floor(ph); f=f*f*(3-2*f);                       // ease in and out of each model
+  const A=X[k], B=X[k2];
+  for(let i=0;i<M;i++){ const a=atoms[i], b=i*3; a.x=A[b]+(B[b]-A[b])*f; a.y=A[b+1]+(B[b+1]-A[b+1])*f; a.z=A[b+2]+(B[b+2]-A[b+2])*f; }
+}
 async function wobbleStep(t, md){
-  if(TRAJ>1){
+  if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz){
+    setEnsembleCoords(t); model.syncAtomPositions(); viewer.render();
+  } else if(TRAJ>1){
     trajF=(trajF+1)%TRAJ;
     await model.setFrame(trajF, {fast: wobbleMode==='replay'});   // rebuild: plain setFrame discards the geometry
     viewer.render();
@@ -543,11 +554,12 @@ function runWobble(rephase){
   const tok=++wobbleTok;
   const start=async md=>{
     if(tok!==wobbleTok || curTab!=='wobble') return;
-    if(TRAJ>1){ trajF=0; await model.setFrame(0); }
+    if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz) setEnsembleCoords(0);
+    else if(TRAJ>1){ trajF=0; await model.setFrame(0); }
     else { if(rephase||!md.phase) md.phase=Array.from({length:md.k},()=>Math.random()*2*Math.PI); setWobbleCoords(0,null); }
     cloudKBuilt=cloudK; styleSpheres(true, true);   // the ONE build: balls for the uncertain, bonds included
     viewer.zoomTo(); viewer.render();
-    if(TRAJ<=1 && model.syncAtomPositions()===false){ window.__err('syncAtomPositions() refused — geometry not fully trackable; wobble will not animate'); return; }
+    if((TRAJ<=1 || (ENSEMBLE && ENSEMBLE.xyz)) && model.syncAtomPositions()===false){ window.__err('syncAtomPositions() refused — geometry not fully trackable; wobble will not animate'); return; }
     let t=0, last=performance.now();
     const frame=async()=>{ if(tok!==wobbleTok || curTab!=='wobble') return;
       const now=performance.now(); t+=((now-last)/1000)*animSpeed; last=now;   // slider changes tempo, not phase
@@ -560,6 +572,7 @@ function runWobble(rephase){
   (TRAJ>1 ? Promise.resolve(null) : loadWobble()).then(start).catch(e=>window.__err(String(e.message||e)));
 }
 function restoreWobbleNative(){
+  if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz){ setEnsembleCoords(0); if(model.syncAtomPositions) model.syncAtomPositions(); return; }
   if(TRAJ>1){ model.setFrame(0); return; }            // back to frame 0; the next render rebuilds
   if(!wobbleX0||!M) return;
   setWobbleCoords(0,null);
@@ -759,16 +772,33 @@ function ensembleSpread(pdb){
   const models=caByModel(pdb); if(models.length<2) return null;
   const resis=[...models[0].keys()].filter(r=>models.every(m=>m.has(r)));
   let X=models.map(m=>resis.map(r=>m.get(r))), use=resis.map((_,i)=>i), rmsf=null;
+  const fits=models.map(()=>[]);                      // per model, the transforms applied, in order
   for(let pass=0;pass<2;pass++){                      // fit on every C-alpha, then on the steadier half
     const ref=use.map(i=>X[0][i]);
-    X=X.map(pts=>{ const T=fitTransform(use.map(i=>pts[i]), ref); return pts.map(T); });
+    X=X.map((pts,k)=>{ const T=fitTransform(use.map(i=>pts[i]), ref); fits[k].push(T); return pts.map(T); });
     rmsf=resis.map((_,i)=>{ const m=[0,0,0]; for(const pts of X) for(let k=0;k<3;k++) m[k]+=pts[i][k]/X.length;
       let ss=0; for(const pts of X) ss+=(pts[i][0]-m[0])**2+(pts[i][1]-m[1])**2+(pts[i][2]-m[2])**2;
       return Math.sqrt(ss/X.length); });
     use=resis.map((_,i)=>i).sort((a,b)=>rmsf[a]-rmsf[b]).slice(0, Math.max(3, Math.floor(resis.length/2)));
   }
   const spread={}; resis.forEach((r,i)=>spread[r]=rmsf[i]);
-  return {models: models.length, spread};
+  return {models: models.length, spread, fits};
+}
+
+// All atoms of every model, moved by that model's fits, as one Float32Array per model in the order the
+// GLModel draws them. Returns null if a model's atom count differs from the drawn model's.
+function ensembleCoords(pdb, fits, nAtoms){
+  const out=[]; let cur=null;
+  for(const line of pdb.split('\n')){
+    if(line.startsWith('MODEL')) cur=[];
+    else if(line.startsWith('ENDMDL')){ if(cur) out.push(cur); cur=null; }
+    else if(cur && (line.startsWith('ATOM') || line.startsWith('HETATM')))
+      cur.push([parseFloat(line.slice(30,38)), parseFloat(line.slice(38,46)), parseFloat(line.slice(46,54))]);
+  }
+  if(out.length!==fits.length || out.some(m=>m.length!==nAtoms)) return null;
+  return out.map((pts,k)=>{ const a=new Float32Array(nAtoms*3);
+    pts.forEach((p,i)=>{ let q=p; for(const T of fits[k]) q=T(q); a[i*3]=q[0]; a[i*3+1]=q[1]; a[i*3+2]=q[2]; });
+    return a; });
 }
 
 // live SS (Cα proxy for DSSP) + rough domain split, so colouring modes have data
@@ -816,7 +846,17 @@ loadPDB().then(pdb=>{
   // treat every residue as confident rather than drawing the whole thing as ghost.
   if(atoms.every(a=>!a.b)) for(const r in res2plddt) res2plddt[r]=100;
   if(nModels>1){ ENSEMBLE=ensembleSpread(pdb);
-    if(ENSEMBLE) for(const r in res2plddt) if(r in ENSEMBLE.spread) res2plddt[r]=spreadToConf(ENSEMBLE.spread[r]); }
+    if(ENSEMBLE){ for(const r in res2plddt) if(r in ENSEMBLE.spread) res2plddt[r]=spreadToConf(ENSEMBLE.spread[r]);
+      ENSEMBLE.xyz=ensembleCoords(pdb, ENSEMBLE.fits, M); } }
+  if(ENSEMBLE){                     // the Wobble story for real models, not the computed sway
+    const w=document.getElementById('wobble'), K=ENSEMBLE.models;
+    w.querySelector('h1').textContent='Ensemble';
+    const ps=w.querySelectorAll('p');
+    ps[0].innerHTML='Not a prediction — <b>'+K+' measured models</b> of the same protein. Each residue is drawn by how far it actually moves between them: steady residues are solid spheres, wandering ones widen into faint probability balls.';
+    if(ps[1]) ps[1].innerHTML='The structure glides from each model to the next, so you watch the real conformations morph into one another. The confident core holds still; the loose parts swing through the space they really occupy.';
+    w.querySelector('.tag').textContent='probble™ · measured spread · '+K+' models';
+    document.getElementById('tabWobble').textContent='Ensemble';
+  }
   // frequency order, so the legend reads carbon → nitrogen → oxygen → sulfur for a protein
   elemsPresent=[...elemCount.entries()].sort((p,q)=>q[1]-p[1]).map(e=>e[0]);
   if(!caOrder.length){ window.__err('no Cα atoms parsed'); return; }
