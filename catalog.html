@@ -76,12 +76,15 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 
 // Every structure is a plain card (probble.css .pb-card): its name, accession and length, its fold class as the
 // accent, its helix and sheet shares as chips; a click opens it in the renderer.
+// UniProt's name field strings the recommended name and every alternative name and EC number together
+// ("Annexin A4 (35-beta calcimedin) (Annexin IV) ..."): the card shows the recommended name, the tooltip the rest.
+const short = n => String(n).split(' (')[0];
 const pct = v => Number.isFinite(v) ? Math.round(v * 100) + '%' : null;
 function card(r){
   const c = CLS.find(k => k.key === r.cls) || CLS[3];
-  const href = TARGET + '?acc=' + encodeURIComponent(r.acc) + '&name=' + encodeURIComponent(r.name);
-  const chips = [c.label, pct(r.ph) && pct(r.ph) + ' helix', pct(r.ps) && pct(r.ps) + ' sheet'].filter(Boolean);
-  return '<a class="pb-card" style="--accent:var(' + c.varc + ')" href="' + esc(href) + '" title="' + esc(r.name) + '"><b>' + esc(r.name) + '</b>'
+  const href = TARGET + '?acc=' + encodeURIComponent(r.acc) + '&name=' + encodeURIComponent(short(r.name));
+  const chips = [pct(r.ph) && pct(r.ph) + ' helix', pct(r.ps) && pct(r.ps) + ' sheet'].filter(Boolean);
+  return '<a class="pb-card" style="--accent:var(' + c.varc + ')" href="' + esc(href) + '" title="' + esc(r.name) + '"><b>' + esc(short(r.name)) + '</b>'
     + '<span class="ctx">UniProt ' + esc(r.acc) + ' · ' + esc(r.len) + ' residues</span>'
     + '<span class="chips">' + chips.map(x => '<span>' + esc(x) + '</span>').join('') + '</span></a>';
 }

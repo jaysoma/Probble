@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -285,8 +285,7 @@ const AA_COL={A:0xf0b54a,V:0xeca636,L:0xe89838,I:0xe08a2e,M:0xd8a820,F:0xe6b24e,
 const ELEMC={C:0x9aa3ad,N:0x3b6cff,O:0xff4d4d,S:0xf5d020,P:0xff9b3d,H:0xe8edf2,_:0xc9b88a};
 // On the light stage (the Watch-folder look, light appearance) near-white hydrogens and pale carbons vanish, so they take
 // slate tones there. The appearance is read once, at load, from the desktop's own setting (glass.js loads later).
-const FV_LIGHT = (() => { let t = null; try { t = localStorage.getItem('lg-theme'); } catch (e) { /* the default */ }
-  return t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches); })();
+const FV_LIGHT = false;      // Probble is always dark (2026-11-24); the light-stage tones below stay for reference
 if (FV_LIGHT) { ELEMC.H = 0xa9b3bf; ELEMC.C = 0x7d8794; }
 const ELEM_NAME={C:'carbon',N:'nitrogen',O:'oxygen',S:'sulfur',P:'phosphorus',H:'hydrogen'};
 const elemColor=el=>ELEMC[el]??ELEMC._;
