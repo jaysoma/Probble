@@ -4,7 +4,7 @@
 
 **Live demo: https://jaysoma.dev/probble/** (the full AlphaFold structure library, browsable by fold class)
 
-![The probble render: confident regions solid, low-confidence loops dissolving into haze, with the frame profiler on the right](media/probble.gif)
+![The probble render: confident regions solid, low-confidence loops dissolving into haze, with the frame profiler on the right showing the fast path: 60 fps, 15.5 ms a frame, nothing allocated](media/probble.gif)
 
 AlphaFold gives every residue a confidence score (pLDDT) and stores it in the B-factor column of every model. The usual way to show it is a color ramp, which hides the structure under a rainbow. Probble makes confidence part of the geometry: confident atoms are solid, uncertain ones turn translucent, and the regions AlphaFold is guessing at dissolve into haze.
 
