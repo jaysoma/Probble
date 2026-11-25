@@ -47,5 +47,5 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"\n  FoldView  ->  http://{HOST}:{PORT}   (landing: catalog.html)\n", flush=True)
+    print(f"\n  Probble  ->  http://{HOST}:{PORT}   (landing: catalog.html)\n", flush=True)
     http.server.ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
