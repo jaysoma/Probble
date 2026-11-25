@@ -69,10 +69,10 @@ const CLS = [
 // ENSEMBLES: experimental entries with many models of one protein. Their cards open the renderer with
 // ?pdb=, which draws confidence from how far each residue moves across the models, not from pLDDT.
 let SHOW_ENS = false, ENS_INDEX = {};   // ENS_INDEX: {accession: {pdb, models, residues}} from ensembles.json, Jay only               // the Ensembles shelf is Jay's only, like the renderer's Ensemble tab
-const ENSEMBLES = [
-  {pdb:'1D3Z', name:'Ubiquitin', note:'10 NMR models', len:76},
-  {pdb:'2K39', name:'Ubiquitin, dynamic ensemble', note:'116 NMR models', len:76},
-];
+// THE PRIVATE SHELF READS ITS LIST FROM private_sets.json (Jay only, not in git): lab-measured sets, simulator
+// output (BioEmu) and anything added later, one page for all of them (Jay, 2026-11-24: "I really dont like the idea
+// of cloning pages for identical behaviour"). Each entry: {pdb, name, len, source: 'lab'|'simulated', note}.
+let ENSEMBLES = [];
 const ACC_RE = /^[A-NR-Z][0-9][A-Z0-9]{3}[0-9]$|^[OPQ][0-9][A-Z0-9]{3}[0-9]$/i;
 // TEMPORARY: cards open the all-3Dmol renderer (three.js removed) instead of explore.html, so a
 // real catalog protein flows straight into it. Options: '3DMolProtein.html' (all-3Dmol),
@@ -107,8 +107,8 @@ function measured(r){
 function ensCard(e){
   const href = TARGET + '?pdb=' + encodeURIComponent(e.pdb) + '&name=' + encodeURIComponent(e.name) + '&tab=ens';
   return '<a class="pb-card" style="--accent:#e9b85a" href="' + esc(href) + '" title="' + esc(e.name) + '"><b>' + esc(e.name) + '</b>'
-    + '<span class="ctx">PDB ' + esc(e.pdb) + ' · ' + esc(e.len) + ' residues</span>'
-    + '<span class="chips"><span>' + esc(e.note) + '</span><span>spread</span></span></a>';
+    + '<span class="ctx">' + (e.source === 'simulated' ? 'BioEmu' : 'PDB ' + esc(e.pdb)) + ' · ' + esc(e.len) + ' amino acids</span>'
+    + '<span class="chips"><span>' + esc(e.source === 'simulated' ? 'simulated' : 'lab') + '</span><span>' + esc(e.note) + '</span></span></a>';
 }
 function render(filter){
   const main = document.getElementById('main'); main.innerHTML = '';
@@ -166,13 +166,14 @@ fetch('catalog.json').then(r => r.json()).then(rows => {
   ROWS = rows;
   const by = {}; CLS.forEach(c => by[c.key] = 0); rows.forEach(r => by[r.cls] = (by[r.cls] || 0) + 1);
   document.getElementById('ct-all').textContent = rows.length;
-  document.getElementById('ct-ens').textContent = ENSEMBLES.length;
   CLS.forEach(c => { win.querySelector('[data-ct="' + c.key + '"]').textContent = by[c.key]; });
   render('');
   fetch('/mode', {cache: 'no-store'}).then(r => r.ok ? r.json() : {}).then(m => {
     if (m.mode !== 'jay') return;
     SHOW_ENS = true; document.getElementById('side-ens').hidden = false;
-    return fetch('ensembles.json', {cache: 'no-store'}).then(r => r.ok ? r.json() : {}).catch(() => ({})).then(ix => { ENS_INDEX = ix;
+    const get = (f, empty) => fetch(f, {cache: 'no-store'}).then(r => r.ok ? r.json() : empty).catch(() => empty);
+    return Promise.all([get('ensembles.json', {}), get('private_sets.json', [])]).then(([ix, sets]) => { ENS_INDEX = ix; ENSEMBLES = sets;
+      document.getElementById('ct-ens').textContent = ENSEMBLES.length;
       document.getElementById('ct-all').textContent = rows.length + ENSEMBLES.length;
       render(q.value); });
   }).catch(() => {});

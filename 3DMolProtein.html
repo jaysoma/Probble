@@ -720,7 +720,9 @@ const SHORT_NAME=(NAME||'').split(' (')[0];
 document.getElementById('pttl').textContent = SHORT_NAME || (REF?'NqrB · subunit B':ACC);
 if(NAME) document.getElementById('pttl').title = NAME;
 document.getElementById('pacc').textContent = ACC || 'O05011';
-if(PDB_ID) document.getElementById('pacc').parentElement.firstChild.textContent = 'PDB ';
+if(PDB_ID){ const sim=PDB_ID.startsWith('SIM_');   // SIM_<NAME>: a simulator's set from the private corpus, not a PDB entry
+  document.getElementById('pacc').parentElement.firstChild.textContent = sim ? 'BioEmu ' : 'PDB ';
+  if(sim) document.getElementById('pacc').textContent = PDB_ID.slice(4).toLowerCase(); }
 
 // ═══════════════════ load + parse ═══════════════════
 async function loadPDB(){

@@ -8,3 +8,4 @@ foldbench.html
 bench/
 ensembles/
 ensembles.json
+private_sets.json
