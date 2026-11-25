@@ -786,19 +786,30 @@ function ensembleSpread(pdb){
 }
 
 // All atoms of every model, moved by that model's fits, as one Float32Array per model in the order the
-// GLModel draws them. Returns null if a model's atom count differs from the drawn model's.
-function ensembleCoords(pdb, fits, nAtoms){
-  const out=[]; let cur=null;
+// GLModel draws them. Matched by chain, residue and atom name, not by position in the file: 3Dmol drops
+// hydrogens when it parses a PDB, so a file's atom order is not the drawn order (Jay, 2026-11-24: the
+// first version matched by position, found 1231 atoms against 602 drawn, and silently fell back to
+// cutting between models every frame). Returns null if any drawn atom is missing from any model.
+function ensembleCoords(pdb, fits, drawn){
+  const models=[]; let cur=null;
   for(const line of pdb.split('\n')){
-    if(line.startsWith('MODEL')) cur=[];
-    else if(line.startsWith('ENDMDL')){ if(cur) out.push(cur); cur=null; }
-    else if(cur && (line.startsWith('ATOM') || line.startsWith('HETATM')))
-      cur.push([parseFloat(line.slice(30,38)), parseFloat(line.slice(38,46)), parseFloat(line.slice(46,54))]);
+    if(line.startsWith('MODEL')) cur=new Map();
+    else if(line.startsWith('ENDMDL')){ if(cur) models.push(cur); cur=null; }
+    else if(cur && (line.startsWith('ATOM') || line.startsWith('HETATM'))){
+      const key=line.slice(21,22)+'|'+parseInt(line.slice(22,26))+'|'+line.slice(12,16).trim();
+      if(!cur.has(key)) cur.set(key, [parseFloat(line.slice(30,38)), parseFloat(line.slice(38,46)), parseFloat(line.slice(46,54))]);
+    }
   }
-  if(out.length!==fits.length || out.some(m=>m.length!==nAtoms)) return null;
-  return out.map((pts,k)=>{ const a=new Float32Array(nAtoms*3);
-    pts.forEach((p,i)=>{ let q=p; for(const T of fits[k]) q=T(q); a[i*3]=q[0]; a[i*3+1]=q[1]; a[i*3+2]=q[2]; });
-    return a; });
+  if(models.length!==fits.length) return null;
+  const keys=drawn.map(a=>(a.chain||' ')+'|'+a.resi+'|'+a.atom);
+  const out=[];
+  for(let k=0;k<models.length;k++){
+    const a=new Float32Array(drawn.length*3);
+    for(let i=0;i<keys.length;i++){ let q=models[k].get(keys[i]); if(!q) return null;
+      for(const T of fits[k]) q=T(q); a[i*3]=q[0]; a[i*3+1]=q[1]; a[i*3+2]=q[2]; }
+    out.push(a);
+  }
+  return out;
 }
 
 // live SS (Cα proxy for DSSP) + rough domain split, so colouring modes have data
@@ -847,7 +858,8 @@ loadPDB().then(pdb=>{
   if(atoms.every(a=>!a.b)) for(const r in res2plddt) res2plddt[r]=100;
   if(nModels>1){ ENSEMBLE=ensembleSpread(pdb);
     if(ENSEMBLE){ for(const r in res2plddt) if(r in ENSEMBLE.spread) res2plddt[r]=spreadToConf(ENSEMBLE.spread[r]);
-      ENSEMBLE.xyz=ensembleCoords(pdb, ENSEMBLE.fits, M); } }
+      ENSEMBLE.xyz=ensembleCoords(pdb, ENSEMBLE.fits, atoms);
+      if(!ENSEMBLE.xyz) window.__err('ensemble: a drawn atom is missing from one of the models; the Ensemble tab will step between models instead of gliding'); } }
   if(ENSEMBLE){                     // the Wobble story for real models, not the computed sway
     const w=document.getElementById('wobble'), K=ENSEMBLE.models;
     w.querySelector('h1').textContent='Ensemble';
