@@ -726,7 +726,8 @@ if(PDB_ID) document.getElementById('pacc').parentElement.firstChild.textContent 
 async function loadPDB(){
   if(!ACC || ACC==='O05011') return (await fetch('O05011_af.pdb')).text();
   const local=await fetch('structures/'+ACC+'.pdb'); if(local.ok) return local.text();
-  if(PDB_ID) return (await fetch('https://files.rcsb.org/download/'+PDB_ID+'.pdb')).text();
+  if(PDB_ID){ const ens=await fetch('ensembles/'+PDB_ID+'.pdb'); if(ens.ok) return ens.text();   // the local measured-versions corpus
+    return (await fetch('https://files.rcsb.org/download/'+PDB_ID+'.pdb')).text(); }
   const meta=await (await fetch('https://alphafold.ebi.ac.uk/api/prediction/'+ACC)).json();
   return (await fetch(meta[0].pdbUrl)).text();
 }

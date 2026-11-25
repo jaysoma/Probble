@@ -6,3 +6,5 @@ wobble/
 wobble-batch.log
 foldbench.html
 bench/
+ensembles/
+ensembles.json

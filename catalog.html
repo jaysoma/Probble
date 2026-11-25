@@ -68,7 +68,7 @@ const CLS = [
 ];
 // ENSEMBLES: experimental entries with many models of one protein. Their cards open the renderer with
 // ?pdb=, which draws confidence from how far each residue moves across the models, not from pLDDT.
-let SHOW_ENS = false;               // the Ensembles shelf is Jay's only, like the renderer's Ensemble tab
+let SHOW_ENS = false, ENS_INDEX = {};   // ENS_INDEX: {accession: {pdb, models, residues}} from ensembles.json, Jay only               // the Ensembles shelf is Jay's only, like the renderer's Ensemble tab
 const ENSEMBLES = [
   {pdb:'1D3Z', name:'Ubiquitin', note:'10 NMR models', len:76},
   {pdb:'2K39', name:'Ubiquitin, dynamic ensemble', note:'116 NMR models', len:76},
@@ -94,7 +94,15 @@ function card(r){
   const chips = [pct(r.ph) && pct(r.ph) + ' helix', pct(r.ps) && pct(r.ps) + ' sheet'].filter(Boolean);
   return '<a class="pb-card" style="--accent:var(' + c.varc + ')" href="' + esc(href) + '" title="' + esc(r.name) + '"><b>' + esc(short(r.name)) + '</b>'
     + '<span class="ctx">UniProt ' + esc(r.acc) + ' · ' + esc(r.len) + ' residues</span>'
-    + '<span class="chips">' + chips.map(x => '<span>' + esc(x) + '</span>').join('') + '</span></a>';
+    + '<span class="chips">' + chips.map(x => '<span>' + esc(x) + '</span>').join('') + measured(r) + '</span></a>';
+}
+// A library protein with a lab-measured set gets a gold label; clicking it (not the tile) opens that set in the
+// renderer's Ensemble tab. Its tooltip says how much of the protein the set covers.
+function measured(r){
+  const e = SHOW_ENS && ENS_INDEX[r.acc.toUpperCase()]; if (!e) return '';
+  const href = TARGET + '?pdb=' + encodeURIComponent(e.pdb) + '&name=' + encodeURIComponent(short(r.name)) + '&tab=ens';
+  const tip = e.pdb + ': ' + e.models + ' measured versions, covering ' + e.residues + ' of ' + r.len + ' amino acids';
+  return '<span class="pb-ens" data-href="' + esc(href) + '" title="' + esc(tip) + '">lab · ' + e.models + ' versions</span>';
 }
 function ensCard(e){
   const href = TARGET + '?pdb=' + encodeURIComponent(e.pdb) + '&name=' + encodeURIComponent(e.name) + '&tab=ens';
@@ -164,9 +172,15 @@ fetch('catalog.json').then(r => r.json()).then(rows => {
   fetch('/mode', {cache: 'no-store'}).then(r => r.ok ? r.json() : {}).then(m => {
     if (m.mode !== 'jay') return;
     SHOW_ENS = true; document.getElementById('side-ens').hidden = false;
-    document.getElementById('ct-all').textContent = rows.length + ENSEMBLES.length;
-    render(q.value);
+    return fetch('ensembles.json', {cache: 'no-store'}).then(r => r.ok ? r.json() : {}).catch(() => ({})).then(ix => { ENS_INDEX = ix;
+      document.getElementById('ct-all').textContent = rows.length + ENSEMBLES.length;
+      render(q.value); });
   }).catch(() => {});
+  // a click on a tile's lab label opens the measured set, not the tile's AlphaFold model
+  document.getElementById('main').addEventListener('click', e => {
+    const lab = e.target.closest('.pb-ens'); if (!lab) return;
+    e.preventDefault(); e.stopPropagation(); location.href = lab.dataset.href;
+  });
 });
 </script>
 </body>
