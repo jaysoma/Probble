@@ -703,29 +703,14 @@ function showTab(which){
 const BUILD_CELL=1.0, BUILD_STEP_S=0.12, BUILD_LEVELS=12;
 let ensView='glide', buildTok=0, buildModel=null;
 function buildKey(x,y,z){ return ((Math.floor(x/BUILD_CELL)+512)&1023)*1048576 + ((Math.floor(y/BUILD_CELL)+512)&1023)*1024 + ((Math.floor(z/BUILD_CELL)+512)&1023); }
-// Brightness: the square root of how often a spot was hit, so a region visited in 1% of shapes still reads (0.1) while
-// the steady core stays brightest; spots dimmer than BUILD_FLOOR are left out (on a full BioEmu set, most of the ~10^5
-// to 10^6 spots are hit once or twice), and at most BUILD_MAX are drawn, the most-visited first.
-const BUILD_FLOOR=0.04, BUILD_MAX=60000, BUILD_SECONDS=20;
-const buildAlpha=(n,seen)=>Math.sqrt(n/seen);
-function drawBuild(cells, seen){
-  if(buildModel) viewer.removeModel(buildModel);
-  buildModel=viewer.addModel();
-  let spots=[]; for(const c of cells.values()){ const a=buildAlpha(c.n,seen); if(a>=BUILD_FLOOR) spots.push([a,c]); }
-  if(spots.length>BUILD_MAX){ spots.sort((p,q)=>q[0]-p[0]); spots.length=BUILD_MAX; }
-  const list=[], groups=new Map();
-  spots.forEach(([a,c],i)=>{
-    const lvl=Math.max(1, Math.round(a*BUILD_LEVELS)), col=resColor(c.resi);
-    list.push({elem:'C', atom:'X', resn:'ENS', resi:c.resi, chain:'A', x:c.sx/c.m, y:c.sy/c.m, z:c.sz/c.m, serial:i, index:i, hetflag:true, bonds:[], bondOrder:[]});
-    const k=lvl+'|'+col; if(!groups.has(k)) groups.set(k,{lvl,col,idx:[]}); groups.get(k).idx.push(i);
-  });
-  buildModel.addAtoms(list);
-  buildModel.setStyle({}, {});
-  for(const g of groups.values())
-    buildModel.setStyle({index:g.idx}, {sphere:{radius:0.55, color:hex(g.col), opacity:Math.min(1, g.lvl/BUILD_LEVELS)}});
-  viewer.render();
-  return spots.length;
-}
+// GROWTH, ON THE IN-PLACE PATH (Jay, 2026-11-25: "Don't we want ... all the acceleration we can get out of 3Dmol?"):
+// rebuilding the spot model on every redraw threw away the GPU buffers three times a second. Instead one sweep through
+// every shape finds the spots that will end up visible; they are built ONCE, as impostor spheres, and then GROW in place
+// (syncSphereRadii rescales each sphere's built radius, the same buffer-rewrite as the #859 fast path): a spot's size is
+// the square root of the fraction of shapes so far that put an atom in it. 3Dmol has no in-place opacity update yet,
+// so size carries the frequency.
+const BUILD_FLOOR=0.04, BUILD_MAX=60000, BUILD_SECONDS=20, BUILD_R=1.1;   // R: a spot hit by every shape overlaps its neighbours, so dense regions read as solid
+const buildSize=(n,seen)=>seen ? Math.sqrt(n/seen) : 0;
 function stopBuild(){
   buildTok++;
   if(buildModel){ viewer.removeModel(buildModel); buildModel=null; }
@@ -749,30 +734,53 @@ async function loadBuildBin(){
 }
 async function runBuild(){
   if(!viewer||!M||!ENSEMBLE||!ENSEMBLE.xyz) return;
-  const tok=++buildTok, cells=new Map();
+  const tok=++buildTok;
   model.hide(); viewer.zoomTo();
-  document.getElementById('ensCount').textContent='loading…';
+  const say=t=>{ document.getElementById('ensCount').textContent=t; };
+  say('loading…');
   const B=await loadBuildBin(); if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return;
-  // one shape's atoms into the cells: from the full set (cell numbers) or the loaded shapes (coordinates)
   const K = B ? B.K : ENSEMBLE.xyz.length, N = B ? B.N : M;
-  const addShape = B
-    ? k=>{ const base=k*N*3, c=B.cells, h=B.cell/2;
-        for(let i=0;i<N;i++){ const p=base+i*3, cx=c[p], cy=c[p+1], cz=c[p+2], key=cx+cy*1024+cz*1048576;
-          let e=cells.get(key);
-          if(!e){ e={n:0, last:-1, resi:B.resi[i], sx:B.lo[0]+cx*B.cell+h, sy:B.lo[1]+cy*B.cell+h, sz:B.lo[2]+cz*B.cell+h, m:1}; cells.set(key,e); }
-          if(e.last!==k){ e.n++; e.last=k; } } }
-    : k=>{ const A=ENSEMBLE.xyz[k];
-        for(let i=0;i<M;i++){ const b=i*3, x=A[b], y=A[b+1], z=A[b+2], key=buildKey(x,y,z);
-          let e=cells.get(key); if(!e){ e={n:0, last:-1, resi:atoms[i].resi, sx:0, sy:0, sz:0, m:0}; cells.set(key,e); }
-          if(e.last!==k){ e.n++; e.last=k; } e.sx+=x; e.sy+=y; e.sz+=z; e.m++; } };
+  // one shape's atoms as cell keys, with the cell's position and the atom's residue
+  const keysOf = B
+    ? (k, fn)=>{ const base=k*N*3, c=B.cells, h=B.cell/2;
+        for(let i=0;i<N;i++){ const p=base+i*3, cx=c[p], cy=c[p+1], cz=c[p+2];
+          fn(cx+cy*1024+cz*1048576, B.lo[0]+cx*B.cell+h, B.lo[1]+cy*B.cell+h, B.lo[2]+cz*B.cell+h, B.resi[i]); } }
+    : (k, fn)=>{ const A=ENSEMBLE.xyz[k];
+        for(let i=0;i<M;i++){ const b=i*3; fn(buildKey(A[b],A[b+1],A[b+2]), A[b], A[b+1], A[b+2], atoms[i].resi); } };
+  // 1. one sweep: the final count of every cell, then the spots that end up visible
+  say('preparing…');
+  const final=new Map();
+  for(let k=0;k<K;k++){
+    keysOf(k, (key,x,y,z,resi)=>{ let e=final.get(key); if(!e){ e={n:0, last:-1, x:0, y:0, z:0, m:0, resi}; final.set(key,e); }
+      if(e.last!==k){ e.n++; e.last=k; } e.x+=x; e.y+=y; e.z+=z; e.m++; });
+    if((k & 255)===255){ await new Promise(r=>setTimeout(r,0)); if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return; }
+  }
+  let spots=[...final.entries()].filter(([,e])=>buildSize(e.n,K)>=BUILD_FLOOR);
+  if(spots.length>BUILD_MAX){ spots.sort((p,q)=>q[1].n-p[1].n); spots.length=BUILD_MAX; }
+  const index=new Map(), list=[], byColour=new Map();
+  spots.forEach(([key,e],i)=>{ index.set(key,i);
+    list.push({elem:'C', atom:'X', resn:'ENS', resi:e.resi, chain:'A', x:e.x/e.m, y:e.y/e.m, z:e.z/e.m, serial:i, index:i, hetflag:true, bonds:[], bondOrder:[]});
+    const col=resColor(e.resi); if(!byColour.has(col)) byColour.set(col,[]); byColour.get(col).push(i); });
+  // 2. build them once, then shrink every one to nothing
+  if(buildModel) viewer.removeModel(buildModel);
+  buildModel=viewer.addModel(); buildModel.addAtoms(list); buildModel.setStyle({}, {});
+  for(const [col,idx] of byColour) buildModel.setStyle({index:idx}, {sphere:{radius:BUILD_R, color:hex(col), opacity:0.85}});
+  viewer.render();
+  const scale=new Float32Array(spots.length), count=new Uint32Array(spots.length), last=new Int32Array(spots.length).fill(-1);
+  const grow=()=>{ buildModel.syncSphereRadii(a=>scale[a.index]); viewer.render(); };
+  if(buildModel.syncSphereRadii(()=>0)===false){ window.__err('build: in-place resize refused by 3Dmol'); return; }
+  viewer.render();
+  // 3. replay the shapes in order; each one grows the spots it lands in
   const perSec = B ? K/BUILD_SECONDS : 1/BUILD_STEP_S;
-  let k=0, last=performance.now(), owed=0, drawnAt=0;
+  let k=0, t=performance.now(), owed=0;
   const step=()=>{ if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return;
-    const now=performance.now(); owed+=((now-last)/1000)*animSpeed*perSec; last=now;
-    const t0=performance.now();
-    while(owed>=1 && k<K && performance.now()-t0<10){ addShape(k); k++; owed--; }   // at most ~10 ms of work a frame
-    if(k>=K || now-drawnAt>(B?350:0)){ drawnAt=now; const shown=drawBuild(cells, k);
-      document.getElementById('ensCount').textContent=k.toLocaleString()+' / '+K.toLocaleString()+' · '+shown.toLocaleString()+' spots'; }
+    const now=performance.now(); owed+=((now-t)/1000)*animSpeed*perSec; t=now;
+    const t0=performance.now(); let moved=false;
+    while(owed>=1 && k<K && performance.now()-t0<8){
+      keysOf(k, key=>{ const i=index.get(key); if(i!==undefined && last[i]!==k){ last[i]=k; count[i]++; } });
+      k++; owed--; moved=true; }
+    if(moved){ for(let i=0;i<scale.length;i++) scale[i]=buildSize(count[i], k); grow();
+      say(k.toLocaleString()+' / '+K.toLocaleString()+' · '+spots.length.toLocaleString()+' spots'); }
     if(k<K) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
