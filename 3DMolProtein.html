@@ -89,6 +89,10 @@
   #ctrls select option { background: #1c1e24; color: #e6ebf2; }
   #ctrls .box { display: flex; align-items: center; gap: 9px; padding: 6px 12px; color: #aab6c4; }
   #ctrls input[type=range] { width: 112px; background: transparent; accent-color: var(--amber); cursor: default; }
+  #ctrls #ensBox .sw { display: flex; padding: 2px; border-radius: 7px; background: rgba(255, 255, 255, .08); }
+  #ctrls #ensBox .sw button { padding: 3px 9px; border: 0; border-radius: 5px; background: none; color: #aab6c4; font: inherit; cursor: pointer; }
+  #ctrls #ensBox .sw button.on { background: var(--amber); color: #0a0e13; font-weight: 700; }
+  #ctrls #ensCount { min-width: 64px; text-align: right; color: var(--amber); font-variant-numeric: tabular-nums; }
   #ctrls #spdVal, #ctrls #confRVal { min-width: 30px; text-align: right; color: var(--amber); font-variant-numeric: tabular-nums; }
   #ctrls > button { padding: 6px 12px; cursor: default; }
   #ctrls > button:hover, #ctrls select:hover { box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .42), 0 4px 14px rgba(0, 0, 0, .25); }
@@ -210,6 +214,8 @@
   </select>
   <div class="box"><span>speed</span><input id="spd" type="range" min="0.25" max="3" step="0.05" value="1"><span id="spdVal">1.0×</span></div>
   <div class="box" id="confBox" style="display:none" title="How large to draw each uncertain atom's probability ball"><span>confidence radius</span><input id="confR" type="range" min="0" max="2.5" step="0.05" value="1"><span id="confRVal">1.0×</span></div>
+  <div class="box" id="ensBox" style="display:none" title="Glide through the shapes, or build up where atoms land across them"><span>view</span>
+    <span class="sw"><button id="ensGlide" class="on">glide</button><button id="ensBuild">build</button></span><span id="ensCount"></span></div>
   <button id="replay" title="Re-run the current view's animation">↻ replay</button>
   
   <div id="legend"></div>
@@ -669,20 +675,85 @@ function showTab(which){
   document.getElementById('wobble').style.display=wobble?'block':'none';
   document.getElementById('ctrls').style.display='flex';
   document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
+  document.getElementById('ensBox').style.display=(ens && ENSEMBLE && ENSEMBLE.xyz)?'flex':'none';
 
   const leavingFold = curTab==='fold' && !fold;
   const leavingWobble = (curTab==='wobble' && !wobble) || (curTab==='ens' && !ens);
   curTab=which;
   growTok++; foldTok++; wobbleTok++;   // cancel whatever animation was running
+  if(typeof stopBuild==='function') stopBuild();
   if(leavingFold) restoreNative();
   if(leavingWobble) restoreWobbleNative();
 
   if(fold){ runFold(); }
+  else if(ens && ensView==='build'){ runBuild(); }
   else if(wobble || ens){ runWobble(false); }
   else if(atomsTab){ viewer.zoomTo(); styleAtomCloud(); }
   else { viewer.zoomTo(); runSphereReveal(); }
   updateLegend();
 }
+// ═══════════════════ Ensemble · build: the probability structure, shape by shape ═══════════════════
+// Jay, 2026-11-25: "Render only the atoms whose coordinate is not in the original shape ... atoms that appear more
+// frequently brighten ... so we can actually watch each protein's probability structure build in real time."
+// Every atom of every shape snaps to a cell of BUILD_CELL angstrom; the three cell numbers pack into one integer key
+// (10 bits each, offset so negatives fit). A key seen before brightens its sphere; a new key adds a barely visible one.
+// One sphere per cell, at the mean position of what landed there, so overlapping shapes never stack translucent
+// layers (the reason the earlier "stack" view came out dark): each sphere carries its own opacity, the fraction of
+// shapes so far that put an atom in its cell.
+const BUILD_CELL=1.0, BUILD_STEP_S=0.12, BUILD_LEVELS=12;
+let ensView='glide', buildTok=0, buildModel=null;
+function buildKey(x,y,z){ return ((Math.floor(x/BUILD_CELL)+512)&1023)*1048576 + ((Math.floor(y/BUILD_CELL)+512)&1023)*1024 + ((Math.floor(z/BUILD_CELL)+512)&1023); }
+function drawBuild(cells, seen){
+  if(buildModel) viewer.removeModel(buildModel);
+  buildModel=viewer.addModel();
+  const list=[], groups=new Map(); let i=0;
+  for(const c of cells.values()){
+    const f=c.n/seen, lvl=Math.max(1, Math.round(f*BUILD_LEVELS)), col=resColor(c.resi);
+    list.push({elem:'C', atom:'X', resn:'ENS', resi:c.resi, chain:'A', x:c.sx/c.n, y:c.sy/c.n, z:c.sz/c.n, serial:i, index:i, hetflag:true, bonds:[], bondOrder:[]});
+    const k=lvl+'|'+col; if(!groups.has(k)) groups.set(k,{lvl,col,idx:[]}); groups.get(k).idx.push(i); i++;
+  }
+  buildModel.addAtoms(list);
+  buildModel.setStyle({}, {});
+  for(const g of groups.values())
+    buildModel.setStyle({index:g.idx}, {sphere:{radius:0.55, color:hex(g.col), opacity:Math.min(1, 0.04+0.96*g.lvl/BUILD_LEVELS)}});
+  viewer.render();
+}
+function stopBuild(){
+  buildTok++;
+  if(buildModel){ viewer.removeModel(buildModel); buildModel=null; }
+  if(model){ model.show(); }
+  document.getElementById('ensCount').textContent='';
+}
+function runBuild(){
+  if(!viewer||!M||!ENSEMBLE||!ENSEMBLE.xyz) return;
+  const tok=++buildTok, X=ENSEMBLE.xyz, K=X.length, cells=new Map();
+  model.hide(); viewer.zoomTo();
+  let k=0, last=performance.now(), acc=0;
+  const step=()=>{ if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return;
+    const now=performance.now(); acc+=((now-last)/1000)*animSpeed; last=now;
+    let added=false;
+    while(acc>=BUILD_STEP_S && k<K){ acc-=BUILD_STEP_S;
+      const A=X[k];
+      for(let i=0;i<M;i++){ const b=i*3, x=A[b], y=A[b+1], z=A[b+2], key=buildKey(x,y,z);
+        let c=cells.get(key); if(!c){ c={n:0, sx:0, sy:0, sz:0, resi:atoms[i].resi, last:-1}; cells.set(key,c); }
+        if(c.last!==k){ c.n++; c.last=k; }              // one count per shape, however many atoms landed in the cell
+        c.sx+=x; c.sy+=y; c.sz+=z; }
+      k++; added=true; }
+    if(added){ drawBuild(cells, k); document.getElementById('ensCount').textContent=k+' / '+K+' · '+cells.size.toLocaleString()+' spots'; }
+    if(k<K) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function setEnsView(v){
+  ensView=v;
+  document.getElementById('ensGlide').classList.toggle('on', v==='glide');
+  document.getElementById('ensBuild').classList.toggle('on', v==='build');
+  if(curTab!=='ens') return;
+  wobbleTok++; stopBuild();
+  if(v==='build'){ restoreWobbleNative(); runBuild(); } else runWobble(false);
+}
+document.getElementById('ensGlide').onclick=()=>setEnsView('glide');
+document.getElementById('ensBuild').onclick=()=>setEnsView('build');
 tabExplore.onclick=()=>showTab('explore');
 tabFold.onclick=()=>showTab('fold'); tabAtoms.onclick=()=>showTab('atoms');
 tabWobble.onclick=()=>showTab('wobble');
@@ -692,6 +763,7 @@ document.getElementById('tabEns').onclick=()=>showTab('ens');
 function replayCurrent(){
   if(!viewer||!M) return;
   if(curTab==='fold') runFold();
+  else if(curTab==='ens' && ensView==='build'){ stopBuild(); runBuild(); }   // build again from the first shape
   else if(curTab==='wobble' || curTab==='ens') runWobble(true);   // re-roll the phases
   else if(curTab==='atoms') styleAtomCloud();   // static view: just restyle
   else runSphereReveal();
