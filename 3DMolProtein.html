@@ -703,20 +703,28 @@ function showTab(which){
 const BUILD_CELL=1.0, BUILD_STEP_S=0.12, BUILD_LEVELS=12;
 let ensView='glide', buildTok=0, buildModel=null;
 function buildKey(x,y,z){ return ((Math.floor(x/BUILD_CELL)+512)&1023)*1048576 + ((Math.floor(y/BUILD_CELL)+512)&1023)*1024 + ((Math.floor(z/BUILD_CELL)+512)&1023); }
+// Brightness: the square root of how often a spot was hit, so a region visited in 1% of shapes still reads (0.1) while
+// the steady core stays brightest; spots dimmer than BUILD_FLOOR are left out (on a full BioEmu set, most of the ~10^5
+// to 10^6 spots are hit once or twice), and at most BUILD_MAX are drawn, the most-visited first.
+const BUILD_FLOOR=0.04, BUILD_MAX=60000, BUILD_SECONDS=20;
+const buildAlpha=(n,seen)=>Math.sqrt(n/seen);
 function drawBuild(cells, seen){
   if(buildModel) viewer.removeModel(buildModel);
   buildModel=viewer.addModel();
-  const list=[], groups=new Map(); let i=0;
-  for(const c of cells.values()){
-    const f=c.n/seen, lvl=Math.max(1, Math.round(f*BUILD_LEVELS)), col=resColor(c.resi);
-    list.push({elem:'C', atom:'X', resn:'ENS', resi:c.resi, chain:'A', x:c.sx/c.n, y:c.sy/c.n, z:c.sz/c.n, serial:i, index:i, hetflag:true, bonds:[], bondOrder:[]});
-    const k=lvl+'|'+col; if(!groups.has(k)) groups.set(k,{lvl,col,idx:[]}); groups.get(k).idx.push(i); i++;
-  }
+  let spots=[]; for(const c of cells.values()){ const a=buildAlpha(c.n,seen); if(a>=BUILD_FLOOR) spots.push([a,c]); }
+  if(spots.length>BUILD_MAX){ spots.sort((p,q)=>q[0]-p[0]); spots.length=BUILD_MAX; }
+  const list=[], groups=new Map();
+  spots.forEach(([a,c],i)=>{
+    const lvl=Math.max(1, Math.round(a*BUILD_LEVELS)), col=resColor(c.resi);
+    list.push({elem:'C', atom:'X', resn:'ENS', resi:c.resi, chain:'A', x:c.sx/c.m, y:c.sy/c.m, z:c.sz/c.m, serial:i, index:i, hetflag:true, bonds:[], bondOrder:[]});
+    const k=lvl+'|'+col; if(!groups.has(k)) groups.set(k,{lvl,col,idx:[]}); groups.get(k).idx.push(i);
+  });
   buildModel.addAtoms(list);
   buildModel.setStyle({}, {});
   for(const g of groups.values())
-    buildModel.setStyle({index:g.idx}, {sphere:{radius:0.55, color:hex(g.col), opacity:Math.min(1, 0.04+0.96*g.lvl/BUILD_LEVELS)}});
+    buildModel.setStyle({index:g.idx}, {sphere:{radius:0.55, color:hex(g.col), opacity:Math.min(1, g.lvl/BUILD_LEVELS)}});
   viewer.render();
+  return spots.length;
 }
 function stopBuild(){
   buildTok++;
@@ -724,22 +732,47 @@ function stopBuild(){
   if(model){ model.show(); }
   document.getElementById('ensCount').textContent='';
 }
-function runBuild(){
+// Every shape of the set, from build_bins.py's packed file: per shape, per atom, the 1 A cell it landed in.
+async function loadBuildBin(){
+  if(!PDB_ID) return null;
+  if(ENSEMBLE.bin!==undefined) return ENSEMBLE.bin;
+  try{
+    const r=await fetch('ensembles/'+PDB_ID+'.build.bin.gz', {cache:'force-cache'});
+    if(!r.ok) return ENSEMBLE.bin=null;
+    const buf=await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer(), dv=new DataView(buf);
+    const magic=String.fromCharCode(...new Uint8Array(buf,0,4)), K=dv.getUint32(4,true), N=dv.getUint32(8,true);
+    const lo=[dv.getFloat32(12,true), dv.getFloat32(16,true), dv.getFloat32(20,true)], cell=dv.getFloat32(24,true);
+    const resi=new Int16Array(buf.slice(28, 28+2*N)), off=28+2*N;
+    const cells = magic==='PBB2' ? new Uint16Array(buf.slice(off)) : new Uint8Array(buf, off);
+    return ENSEMBLE.bin={K, N, lo, cell, resi, cells};
+  }catch(e){ window.__err('build: could not read the full set ('+e.message+'); building from the shapes loaded'); return ENSEMBLE.bin=null; }
+}
+async function runBuild(){
   if(!viewer||!M||!ENSEMBLE||!ENSEMBLE.xyz) return;
-  const tok=++buildTok, X=ENSEMBLE.xyz, K=X.length, cells=new Map();
+  const tok=++buildTok, cells=new Map();
   model.hide(); viewer.zoomTo();
-  let k=0, last=performance.now(), acc=0;
+  document.getElementById('ensCount').textContent='loading…';
+  const B=await loadBuildBin(); if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return;
+  // one shape's atoms into the cells: from the full set (cell numbers) or the loaded shapes (coordinates)
+  const K = B ? B.K : ENSEMBLE.xyz.length, N = B ? B.N : M;
+  const addShape = B
+    ? k=>{ const base=k*N*3, c=B.cells, h=B.cell/2;
+        for(let i=0;i<N;i++){ const p=base+i*3, cx=c[p], cy=c[p+1], cz=c[p+2], key=cx+cy*1024+cz*1048576;
+          let e=cells.get(key);
+          if(!e){ e={n:0, last:-1, resi:B.resi[i], sx:B.lo[0]+cx*B.cell+h, sy:B.lo[1]+cy*B.cell+h, sz:B.lo[2]+cz*B.cell+h, m:1}; cells.set(key,e); }
+          if(e.last!==k){ e.n++; e.last=k; } } }
+    : k=>{ const A=ENSEMBLE.xyz[k];
+        for(let i=0;i<M;i++){ const b=i*3, x=A[b], y=A[b+1], z=A[b+2], key=buildKey(x,y,z);
+          let e=cells.get(key); if(!e){ e={n:0, last:-1, resi:atoms[i].resi, sx:0, sy:0, sz:0, m:0}; cells.set(key,e); }
+          if(e.last!==k){ e.n++; e.last=k; } e.sx+=x; e.sy+=y; e.sz+=z; e.m++; } };
+  const perSec = B ? K/BUILD_SECONDS : 1/BUILD_STEP_S;
+  let k=0, last=performance.now(), owed=0, drawnAt=0;
   const step=()=>{ if(tok!==buildTok || curTab!=='ens' || ensView!=='build') return;
-    const now=performance.now(); acc+=((now-last)/1000)*animSpeed; last=now;
-    let added=false;
-    while(acc>=BUILD_STEP_S && k<K){ acc-=BUILD_STEP_S;
-      const A=X[k];
-      for(let i=0;i<M;i++){ const b=i*3, x=A[b], y=A[b+1], z=A[b+2], key=buildKey(x,y,z);
-        let c=cells.get(key); if(!c){ c={n:0, sx:0, sy:0, sz:0, resi:atoms[i].resi, last:-1}; cells.set(key,c); }
-        if(c.last!==k){ c.n++; c.last=k; }              // one count per shape, however many atoms landed in the cell
-        c.sx+=x; c.sy+=y; c.sz+=z; }
-      k++; added=true; }
-    if(added){ drawBuild(cells, k); document.getElementById('ensCount').textContent=k+' / '+K+' · '+cells.size.toLocaleString()+' spots'; }
+    const now=performance.now(); owed+=((now-last)/1000)*animSpeed*perSec; last=now;
+    const t0=performance.now();
+    while(owed>=1 && k<K && performance.now()-t0<10){ addShape(k); k++; owed--; }   // at most ~10 ms of work a frame
+    if(k>=K || now-drawnAt>(B?350:0)){ drawnAt=now; const shown=drawBuild(cells, k);
+      document.getElementById('ensCount').textContent=k.toLocaleString()+' / '+K.toLocaleString()+' · '+shown.toLocaleString()+' spots'; }
     if(k<K) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
