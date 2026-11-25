@@ -83,3 +83,7 @@ body.lg-desktop { margin: 0; background: var(--pb-bg); color: var(--lg-text); fo
 /* the lab label on a library tile with a measured set (Jay only): gold, like the Ensembles shelf */
 .pb-card .chips .pb-ens { background: rgba(233, 184, 90, .16); color: #e9b85a; cursor: pointer; }
 .pb-card .chips .pb-ens:hover { background: rgba(233, 184, 90, .3); }
+
+/* [hidden] must win over the display rules above (.lg-side-item is display:flex), or private controls such as the
+   Ensembles button show, empty, to visitors the gateway doesn't recognise (2026-11-24) */
+[hidden] { display: none !important; }
