@@ -16,7 +16,7 @@ AlphaFold gives every residue a confidence score (pLDDT) and stores it in the B-
   ![An extended chain moving into AlphaFold's predicted structure](media/fold.gif)
 
   *Illustration: an idealized extended chain moving into AlphaFold's predicted structure. Not a folding pathway.*
-- **The probble render.** Low-confidence regions drawn as a soft glow rather than as precise-looking atoms, so disordered loops look as uncertain as they are.
+- **The probble render (Wobble view).** Where AlphaFold is confident, an atom is a sphere. Where it isn't, the atom is drawn as the space it could occupy: a probability ball that widens and thins as pLDDT falls, so disordered tails read as the clouds they are instead of frozen spaghetti. It's the crystallographer's thermal-ellipsoid convention (ORTEP), applied to AlphaFold confidence. The whole structure also sways along its own collective modes, the hinge and breathing motions an elastic network model finds on its confident core (`wobble.py`, ProDy), moved in place every frame on the same fast path. A slider scales the balls; at zero, every atom is a plain sphere again.
 
 ## Running it locally
 
