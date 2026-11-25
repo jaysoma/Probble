@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Probble · protein</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="probble.css">
+<!--
+  explore.html, with three.js removed.
+
+  explore.html runs two renderers: 3Dmol for the Protein tab, and a separate three.js starfield
+  (pv) for Assemble, Fold and Atoms. This page does all of it on 3Dmol alone.
+
+    Protein   spheres + bonds, colour by scheme, pLDDT as per-atom opacity (issue #166). Atoms
+              are at their FINAL opacity from frame one; the entrance grows them instead, from
+              zero radius to full, centre-outward. Opacity was the wrong channel for an entrance
+              -- it already means confidence, so fading it made every atom misreport itself
+              until the animation ended. Radius was free, and it is the cheaper channel too.
+    Assemble  was the starfield's uReveal uniform walking N->C. Now the same grow engine as the
+              Protein entrance, ordered by sequence position instead of radius, with the
+              sequence cursor tracking the sweep.
+    Fold      was three.js foldTo(): a per-instance 4x4 matrix per atom into an InstancedMesh.
+              Now lerps the atom coordinates and calls GLModel.syncAtomPositions(), which
+              rewrites the imposter vertices in place -- 12 floats per atom and one
+              bufferSubData, against three.js's 16 floats plus a whole-buffer re-upload. Bonds
+              travel with the atoms: every position this model draws is lerp(atomA, atomB, t),
+              so lines and sticks replay from the same recipe the spheres do.
+    Atoms     was a three.js Points cloud with a per-point size attribute. Now sphere imposters
+              at every atom centre -- tiny fixed-radius beads, keeping the TumorSim amber-core →
+              white-shell radial ramp and the centre-biased size (bucketed, since 3Dmol sizes by
+              style not by attribute). Opaque, so it never touches the translucent twin.
+    Wobble    renders WHERE ATOMS COULD BE, not how they move. A confident atom is a sphere;
+              an uncertain one is its probability ball -- radius growing continuously as
+              pLDDT falls, opacity thinning as it grows -- the crystallographer's thermal-
+              ellipsoid convention (ORTEP) applied to AlphaFold confidence. The whole body
+              sways along its collective modes (wobble.py -> wobble/<ACC>.bin, an elastic
+              network on the pLDDT>=70 core), moved in place by syncAtomPositions(). A
+              confidence-radius slider scales the balls: in place while dragging
+              (syncSphereRadii), rebuilt on release so opacity follows. A PATH toggle chooses
+              how each frame reaches the screen -- replay in place, or rebuild everything as
+              trajectory playback does today -- and a dashboard under the legend samples frame
+              time, bytes allocated, main-thread busy share and rate. A multi-model file (e.g.
+              structures/TEMP_1_2_28.pdb, 3Dmol's 29-frame test trajectory) plays its own
+              frames through setFrame() on this tab instead of the ANM sway.
+
+  Consequences worth knowing: no CDN dependency at all now (explore.html imports three from
+  esm.sh at runtime), one canvas instead of two, one camera instead of two, and mouse handling
+  is 3Dmol's own rather than OrbitControls. Needs 3Dmol.js 3.0.0 or later, the first release with
+  syncSpherePositions() and syncAtomPositions().
+-->
+<style>
+  /* THE RENDERER, ONE PROTEIN (flat since 2026-11-24, probble.css: "We'll need a barebones one"). The sidebar keeps each
+     view's story, the five views are the toolbar's segmented control, the scene is a dark stage, and the controls are flat
+     panels over it. Every id the script reads is unchanged. */
+  :root { --amber: #f0b54a; --green: #49d18a; --muted: #8aa0b8; --fv-seg-on: rgba(255, 255, 255, .20); }
+  :root[data-theme="light"] { --fv-seg-on: #fff; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --fv-seg-on: #fff; } }
+  #left *, .fv-stage * { box-sizing: border-box; }
+
+  /* the sidebar: the story of the view you're in */
+  #left { flex: none; display: flex; flex-direction: column; width: 340px; min-height: 0; }
+  .fv-side-top { flex: none; }
+  #explore, #asm, #fold, #atoms, #wobble { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 18px 18px 14px; user-select: text; }
+  #explore h1, #asm h1, #fold h1, #atoms h1, #wobble h1 { margin: 6px 0 10px; font-size: 18px; font-weight: 700; color: var(--lg-text); }
+  #explore p, #asm p, #fold p, #atoms p, #wobble p { margin: 0 0 11px; font-size: 13px; line-height: 1.6; color: var(--lg-text-2); }
+  #explore p b, #asm p b, #fold p b, #atoms p b, #wobble p b { color: var(--lg-text); }
+  #explore .tag, #asm .tag, #fold .tag, #atoms .tag, #wobble .tag { display: inline-block; padding: 3px 9px; border-radius: 999px;
+    background: var(--lg-control); box-shadow: inset 0 0 0 .5px rgba(128, 128, 128, .3); font-size: 11px; color: var(--lg-text-2); }
+
+  /* the toolbar: back to the library, the protein, the five views */
+  .lg-title small { margin-left: 6px; font-size: 12px; font-weight: 500; color: var(--lg-text-2); }
+  .lg-title small b { color: var(--lg-text); font-variant-numeric: tabular-nums; }
+  #tabs { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--lg-frost); box-shadow: var(--lg-frost-rims); }   /* the sidebar's glass */
+  #tabs button { padding: 4px 12px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12px; color: var(--lg-text-2); cursor: default; }
+  #tabs button:hover { color: var(--lg-text); }
+  #tabs button.on { background: var(--fv-seg-on); color: var(--lg-text); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+
+  /* the scene: smoked glass the atoms float in */
+  .fv-stage { position: relative; flex: 1; min-height: 0; margin: 12px; overflow: hidden; border-radius: 14px;
+    background: rgba(8, 11, 16, .84); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12); }
+  #scene { position: absolute; inset: 0; }
+  #mol { position: absolute; inset: 0; }
+  #mol canvas { outline: none; }
+  #seqbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; display: none; max-height: 30%; overflow: auto; padding: 8px 14px;
+    background: rgba(8, 11, 16, .92); border-top: .5px solid rgba(255, 255, 255, .12);
+    font: 11px/1.7 "SF Mono", Menlo, Consolas, monospace; letter-spacing: 2px; color: #8aa0b8; word-break: break-all; }
+  #seqbar span.cur { padding: 0 1px; border-radius: 2px; background: var(--amber); color: #0a0e13; font-weight: 700; }
+
+  /* the controls: glass chips over the scene */
+  #ctrls { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
+  #ctrls select, #ctrls .box, #ctrls > button, #legend, #dash { border: 0; border-radius: 10px; background: rgba(28, 30, 36, .62);
+    box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22), 0 4px 14px rgba(0, 0, 0, .25); color: #e6ebf2; font: 12px var(--lg-font); }
+  #ctrls select { padding: 6px 28px 6px 12px; cursor: default; -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23c9d3df' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; }
+  #ctrls select option { background: #1c1e24; color: #e6ebf2; }
+  #ctrls .box { display: flex; align-items: center; gap: 9px; padding: 6px 12px; color: #aab6c4; }
+  #ctrls input[type=range] { width: 112px; background: transparent; accent-color: var(--amber); cursor: default; }
+  #ctrls #spdVal, #ctrls #confRVal { min-width: 30px; text-align: right; color: var(--amber); font-variant-numeric: tabular-nums; }
+  #ctrls #modeBox .sw { display: flex; padding: 2px; border-radius: 7px; background: rgba(255, 255, 255, .08); }
+  #ctrls #modeBox .sw button { padding: 3px 9px; border: 0; border-radius: 5px; background: none; color: #aab6c4; font: inherit; cursor: default; }
+  #ctrls #modeBox .sw button.on { background: var(--amber); color: #0a0e13; font-weight: 700; }
+  #ctrls > button { padding: 6px 12px; cursor: default; }
+  #ctrls > button:hover, #ctrls select:hover { box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .42), 0 4px 14px rgba(0, 0, 0, .25); }
+  #legend { display: none; max-width: 230px; padding: 9px 12px; font-size: 11px; color: #aab6c4; }
+  #legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+  #legend .sw { flex: none; width: 11px; height: 11px; border-radius: 3px; }
+  #dash { display: none; width: 230px; padding: 9px 12px 6px; font-size: 11px; color: #aab6c4; }
+  #dash .row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin: 2px 0; }
+  #dash .row b { margin-left: auto; font-size: 13px; color: var(--amber); font-variant-numeric: tabular-nums; }
+  #dash .row .u { min-width: 22px; color: #6f8296; }
+  #dash .k { font-size: 10px; letter-spacing: .6px; text-transform: uppercase; color: #6f8296; }
+  #dash canvas { display: block; width: 206px; height: 24px; margin: 1px 0 7px; }
+
+  /* THE WATCH-FOLDER LOOK, IN THE LIGHT APPEARANCE (Jay, 2026-10-23: the smoked stage stayed near-black "even at full
+     opacity", and the coil and the ghosted atoms lost their contrast on it; iPadOS's Watch folder "would be a nicer
+     look"). The stage becomes a pane of light frosted glass the protein sits on in full colour, the controls light glass
+     with dark text, amber kept for values. The dark appearance keeps the smoked stage above. */
+  :root[data-theme="light"] {
+    --fv-stage: rgba(255, 255, 255, .42); --fv-stage-rim: rgba(255, 255, 255, .75); --fv-bar: rgba(255, 255, 255, .82);
+    --fv-chip: rgba(255, 255, 255, .72); --fv-chip-rim: rgba(0, 0, 0, .08); --fv-chip-rim-hover: rgba(0, 0, 0, .16); --fv-shadow: .10;
+    --fv-ink: #1d1f24; --fv-ink-2: #59626e; --fv-ink-3: #7b8592; --fv-amber: #a86a00; --fv-option: #fff; --fv-sw: rgba(0, 0, 0, .06);
+    --fv-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2359626e' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --fv-stage: rgba(255, 255, 255, .42); --fv-stage-rim: rgba(255, 255, 255, .75); --fv-bar: rgba(255, 255, 255, .82);
+      --fv-chip: rgba(255, 255, 255, .72); --fv-chip-rim: rgba(0, 0, 0, .08); --fv-chip-rim-hover: rgba(0, 0, 0, .16); --fv-shadow: .10;
+      --fv-ink: #1d1f24; --fv-ink-2: #59626e; --fv-ink-3: #7b8592; --fv-amber: #a86a00; --fv-option: #fff; --fv-sw: rgba(0, 0, 0, .06);
+      --fv-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2359626e' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    }
+  }
+  .fv-stage { background: var(--fv-stage, rgba(8, 11, 16, .84)); box-shadow: inset 0 0 0 .5px var(--fv-stage-rim, rgba(255, 255, 255, .12)); }
+  #seqbar { background: var(--fv-bar, rgba(8, 11, 16, .78)); color: var(--fv-ink-2, #8aa0b8); border-top-color: var(--fv-chip-rim, rgba(255, 255, 255, .12)); }
+  /* THE CHIPS OVER THE SCENE WEAR THE SIDEBAR'S GLASS (Jay, 2026-10-24: every tile the left panel's frost, glass.css) */
+  #ctrls select, #ctrls .box, #ctrls > button, #legend, #dash { background-color: var(--lg-frost); color: var(--fv-ink, #e6ebf2);
+    box-shadow: var(--lg-frost-rims); }
+  #ctrls select { background-image: var(--fv-arrow, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23c9d3df' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E")); }
+  #ctrls > button:hover, #ctrls select:hover { background-color: var(--lg-frost-hover); }
+  #ctrls select option { background: var(--fv-option, #1c1e24); color: var(--fv-ink, #e6ebf2); }
+  #ctrls .box, #legend, #dash, #ctrls #modeBox .sw button { color: var(--fv-ink-2, #aab6c4); }
+  #ctrls #modeBox .sw { background: var(--fv-sw, rgba(255, 255, 255, .08)); }
+  #ctrls #modeBox .sw button.on { color: #0a0e13; }
+  #ctrls #spdVal, #ctrls #confRVal, #dash .row b { color: var(--fv-amber, var(--amber)); }
+  #dash .row .u, #dash .k { color: var(--fv-ink-3, #6f8296); }
+</style>
+</head>
+<body class="lg-desktop">
+<script>
+  window.__err=function(m){let d=document.getElementById('eb');if(!d){d=document.createElement('div');d.id='eb';
+    d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#3a0d0d;color:#ffb4b4;font:12px monospace;padding:10px;white-space:pre-wrap;max-height:45vh;overflow:auto';(document.body||document.documentElement).appendChild(d);}d.textContent+=m+'\n';};
+  addEventListener('error',e=>window.__err('ERROR: '+(e.message||e.type)+(e.filename?(' @ '+e.filename.split('/').pop()+':'+e.lineno):'')));
+  addEventListener('unhandledrejection',e=>window.__err('REJECT: '+((e.reason&&e.reason.message)||e.reason)));
+</script>
+<main class="lg-workspace" id="workspace">
+<section class="lg-window" id="win-fv3" aria-label="Probble">
+<aside class="lg-sidebar" id="left">
+  <div class="fv-side-top" data-drag><div class="lg-traffic">
+    <button class="lg-tl lg-tl-close" aria-label="Close"></button>
+    <button class="lg-tl lg-tl-min" aria-label="Minimize"></button>
+    <button class="lg-tl lg-tl-zoom" aria-label="Zoom"></button>
+  </div></div>
+  <div class="lg-side-head">Probble</div>
+  <div id="explore" style="display:block">
+    <h1>Protein</h1>
+    <p>The structure atom by atom, every bead the same size and every bond drawn, coloured by
+    the scheme you pick, with <b>opacity carrying AlphaFold's per-residue confidence</b>
+    (pLDDT): solid where the model is sure, fading to ghost where it's guessing. The faded
+    wisps are usually real biology — intrinsically disordered regions that hold no fixed shape.</p>
+    <p>It builds from the core outward: atoms grow in from nothing, and the buried centre
+    finishes before the surface reaches full size.</p>
+    <span class="tag">drag · scroll · recolour</span>
+  </div>
+  <div id="asm">
+    <h1>Read into existence</h1>
+    <p>The raw input is the one-letter sequence printed across the top — all <b id="asmN">…</b> amino acids, N-terminus to C-terminus. A cursor parses it left to right, and the structure grows in 3-D, residue by residue, along the native fold.</p>
+    <p>Step 1 made literal: a bare string of letters becoming a folded protein, one parsed residue at a time.</p>
+    <span class="tag">input sequence · parsed into the fold</span>
+  </div>
+  <div id="fold">
+    <h1>Fold</h1>
+    <p>The idealized unfolded chain collapsing into its native structure — the “possible initial” folding into the verified fold, every atom travelling to its place at once.</p>
+    <span class="tag">illustration · coil → native</span>
+  </div>
+  <div id="wobble">
+    <h1>Wobble</h1>
+    <p>Not motion — <b>the distribution</b>. Where AlphaFold is confident, an atom is a sphere.
+    Where it is not, the atom is drawn as the space it could occupy: a ball that widens and thins
+    as confidence falls, so the disordered tails read as the clouds they really are instead of
+    frozen spaghetti. It is the crystallographer's thermal-ellipsoid convention, applied to
+    pLDDT.</p>
+    <p>The whole structure sways along its own collective modes — the hinge and breathing motions
+    an elastic network model finds for this fold — so domains move against each other the way the
+    physics says they can. The confidence-radius slider exaggerates or suppresses the balls; at
+    zero, every atom is a plain sphere again.</p>
+    <span class="tag">probble™ · pLDDT as volume · ANM sway</span>
+  </div>
+  <div id="atoms">
+    <h1>Atoms</h1>
+    <p>Every atom as a single point — its bare centre, no bonds, no surfaces. Colour follows the
+    scheme you pick, dimmed toward the outside and with the points growing toward the centre, so
+    depth reads and density alone does the glow.</p>
+    <span class="tag">all atoms · centre points</span>
+  </div>
+</aside>
+<div class="lg-main">
+  <div class="lg-toolbar" data-drag>
+    <div class="lg-capsule"><button id="back" aria-label="Back to the library" title="Library"><svg viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></svg></button></div>
+    <h1 class="lg-title"><span id="pttl">…</span><small>UniProt <b id="pacc">…</b></small></h1>
+    <span class="lg-spacer"></span>
+    <div id="tabs">
+      <button id="tabExplore" class="on">Protein</button>
+      <button id="tabAsm">Assemble</button>
+      <button id="tabFold">Fold</button>
+      <button id="tabWobble">Wobble</button>
+      <button id="tabAtoms">Atoms</button>
+    </div>
+  </div>
+  <div class="fv-stage lg-float">
+<div id="scene"><div id="mol"></div></div>
+<div id="seqbar"></div>
+<div id="ctrls">
+  <select id="cmode" title="Colour scheme — every option is a standard protein-rendering convention">
+    <option value="ss">Colour: secondary structure</option>
+    <option value="spectrum">Colour: rainbow · N→C</option>
+    <option value="chain">Colour: amino acid</option>
+    <option value="segdom">Colour: domains (computed)</option>
+    <option value="element">Colour: atom type (CPK)</option>
+  </select>
+  <div class="box"><span>speed</span><input id="spd" type="range" min="0.25" max="3" step="0.05" value="1"><span id="spdVal">1.0×</span></div>
+  <div class="box" id="confBox" style="display:none" title="How large to draw each uncertain atom's probability ball"><span>confidence radius</span><input id="confR" type="range" min="0" max="2.5" step="0.05" value="1"><span id="confRVal">1.0×</span></div>
+  <div class="box" id="modeBox" style="display:none" title="How each frame reaches the screen. Flipping restarts the animation from a fresh build."><span>path</span>
+    <span class="sw"><button id="modeFast" class="on">fast path</button><button id="modeRebuild">rebuild every frame</button></span></div>
+  <button id="replay" title="Re-run the current view's animation">↻ replay</button>
+  
+  <div id="legend"></div>
+  <div id="dash">
+    <div class="row"><span class="k">frame</span><b id="dFrame">0</b><span class="u"></span></div>
+    <div class="row"><span class="k">frame time</span><b id="dMs">—</b><span class="u">ms</span></div>
+    <canvas id="cMs" width="412" height="48"></canvas>
+    <div class="row"><span class="k">allocated / frame</span><b id="dAlloc">—</b><span class="u">MB</span></div>
+    <canvas id="cAlloc" width="412" height="48"></canvas>
+    <div class="row"><span class="k">main thread busy</span><b id="dBusy">—</b><span class="u">%</span></div>
+    <canvas id="cBusy" width="412" height="48"></canvas>
+    <div class="row"><span class="k">rate</span><b id="dFps">—</b><span class="u">fps</span></div>
+  </div>
+</div>
+  </div>
+</div>
+</section>
+</main>
+
+<!-- 3Dmol.js 3.0.0, the release that shipped per-atom opacity (#858) and the in-place coordinate path (#859). Earlier
+     builds lack syncSpherePositions() and the
+     Fold tab would silently fall back to a full rebuild every frame. -->
+<script>
+// Typed-array allocation counter for the Wobble dashboard. 3Dmol looks these constructors up
+// on the global at call time, so subclassing them counts every array it creates while
+// `counting` is on. Views and subarrays are not allocations and go through untouched.
+window.__alloc={bytes:0,counting:false};
+for(const name of ['Float32Array','Float64Array','Uint16Array','Uint32Array','Int32Array','Uint8Array','ArrayBuffer']){
+  const Orig=window[name];
+  const W=function(...args){ const inst=Reflect.construct(Orig,args,new.target||W); if(window.__alloc.counting) window.__alloc.bytes+=inst.byteLength; return inst; };
+  W.prototype=Orig.prototype; Object.setPrototypeOf(W,Orig); Object.defineProperty(W,'name',{value:name}); window[name]=W;
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/3dmol@3.0.0/build/3Dmol-min.js"></script>
+<script>
+const $3Dmol = window.$3Dmol;
+if(!$3Dmol) window.__err('3Dmol failed to load (3Dmol.js 3.0.0 from the CDN)');
+
+const THREE_TO_ONE={ALA:'A',ARG:'R',ASN:'N',ASP:'D',CYS:'C',GLN:'Q',GLU:'E',GLY:'G',HIS:'H',ILE:'I',
+  LEU:'L',LYS:'K',MET:'M',MSE:'M',PHE:'F',PRO:'P',SER:'S',THR:'T',TRP:'W',TYR:'Y',VAL:'V'};
+const DOMG=[0x3987e5,0xd95926,0x199e70,0x9085e9];
+const SS_H=0x3987e5, SS_E=0xe0a638, SS_C=0x7c8896;
+const AA_COL={A:0xf0b54a,V:0xeca636,L:0xe89838,I:0xe08a2e,M:0xd8a820,F:0xe6b24e,W:0xcf963e,P:0xc79a55,G:0x9aa3ad,
+  S:0x46d1a0,T:0x3fc593,C:0xf5d020,Y:0x86cf7e,N:0x44caa2,Q:0x3eba93,
+  D:0xff5a5a,E:0xff6b6b,K:0x4f9bff,R:0x3b6cff,H:0x6f8fff,X:0x808890};
+// CPK, the universal element convention. AlphaFold models contain exactly four elements --
+// carbon, nitrogen, oxygen, sulfur -- and sulfur is roughly 1 atom in 250, so cysteines and
+// methionines show up as isolated yellow sparks. The rest are here for non-AlphaFold input.
+const ELEMC={C:0x9aa3ad,N:0x3b6cff,O:0xff4d4d,S:0xf5d020,P:0xff9b3d,H:0xe8edf2,_:0xc9b88a};
+// On the light stage (the Watch-folder look, light appearance) near-white hydrogens and pale carbons vanish, so they take
+// slate tones there. The appearance is read once, at load, from the desktop's own setting (glass.js loads later).
+const FV_LIGHT = (() => { let t = null; try { t = localStorage.getItem('lg-theme'); } catch (e) { /* the default */ }
+  return t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches); })();
+if (FV_LIGHT) { ELEMC.H = 0xa9b3bf; ELEMC.C = 0x7d8794; }
+const ELEM_NAME={C:'carbon',N:'nitrogen',O:'oxygen',S:'sulfur',P:'phosphorus',H:'hydrogen'};
+const elemColor=el=>ELEMC[el]??ELEMC._;
+// Confidence as TRANSLUCENCY: one owner for the pLDDT→alpha bands, shared by the sphere
+// representation and by both animated tabs.
+function confA(b){ return b>=90?1.0 : b>=70?0.75 : b>=50?0.4 : 0.2; }
+
+const P=new URLSearchParams(location.search), ACC=(P.get('acc')||'').toUpperCase(), NAME=P.get('name');
+const REF = !ACC || ACC==='O05011';
+
+// ═══════════════════ per-residue maps + colouring ═══════════════════
+let res2ss={}, res2dom_gen={}, res2code={}, res2plddt={}, res2order={};
+let N=0, maxResi=0, minResi=1;
+let colorMode='ss';
+function activeMode(){ return colorMode; }
+function resColor(resi){ const mode=activeMode();
+  const ss=res2ss[resi], code=res2code[resi], plddt=res2plddt[resi]||0;
+  switch(mode){
+    case 'ss':    return ss==='H'?SS_H : ss==='E'?SS_E : SS_C;
+    case 'segdom':{ const d=res2dom_gen[resi]; return d===undefined?SS_C:DOMG[d%DOMG.length]; }
+    case 'chain':
+    case 'aa':    return AA_COL[code]??AA_COL.X;
+    default:      return ss==='H'?SS_H : ss==='E'?SS_E : SS_C;
+  }
+}
+const hex=c=>'#'+(c>>>0&0xffffff).toString(16).padStart(6,'0');
+function rainbowHex(t){ const h=(1-Math.max(0,Math.min(1,t)))*240, s=0.72, l=0.56;   // N=blue(240°)→C=red(0°)
+  const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2; let r,g,b;
+  if(h<60){r=c;g=x;b=0;}else if(h<120){r=x;g=c;b=0;}else if(h<180){r=0;g=c;b=x;}else if(h<240){r=0;g=x;b=c;}else{r=x;g=0;b=c;}
+  return (Math.round((r+m)*255)<<16)|(Math.round((g+m)*255)<<8)|Math.round((b+m)*255); }
+
+// ═══════════════════ viewer state ═══════════════════
+let viewer=null, model=null, atoms=[], M=0;
+let elemsPresent=[];        // the elements this structure actually contains, in frequency order
+let curTab='explore';
+let foldXYZ=null, coilXYZ=null;   // Float32Array xyz per atom, native and unfolded endpoints
+let TRAJ=0;                        // >1: the file is a multi-model trajectory; Wobble plays its frames
+
+// Uniform bead size: every atom the same radius, so the only thing that varies it on screen is
+// distance. (Change SPHERE_R alone to resize; swap radius for `scale: 0.35` to go back to
+// van-der-Waals-proportional space-filling.)
+const SPHERE_R=0.5;
+
+// Uncertain atoms (pLDDT < 70) are drawn as their probability ball on the Wobble tab: the radius
+// grows continuously as confidence falls -- the thermal-ellipsoid convention (ORTEP) applied to
+// pLDDT -- and opacity thins as the ball grows, so a wide ball reads as fog rather than a blob.
+// cloudK is the user's confidence-radius multiplier on the EXTRA radius; 0 collapses every ball
+// back to a plain atom. Values are quantised so residues still group into few style calls.
+const CLOUD_R_MAX=3.5;                       // angstrom: ball radius at pLDDT 0, cloudK 1
+const CLOUD_A_MAX=0.40, CLOUD_A_MIN=0.07;    // opacity at a plain-atom radius / at CLOUD_R_MAX
+let cloudK=1, cloudKBuilt=1;                 // slider value / the value the geometry was built at
+const ballExtra=b=> b<70 ? (CLOUD_R_MAX-SPHERE_R)*((70-b)/70) : 0;
+const ballRadius=(b,k)=> Math.round((SPHERE_R+k*ballExtra(b))*10)/10;
+const ballAlpha=(b,k)=>{ const t=Math.min(1,(k*ballExtra(b))/(CLOUD_R_MAX-SPHERE_R));
+  return Math.round((CLOUD_A_MAX+(CLOUD_A_MIN-CLOUD_A_MAX)*t)*100)/100; };
+// In-place rescale from the built radius to the slider's, for syncSphereRadii.
+const ballScale=a=>{ const b=(a.b===undefined?100:a.b); if(b>=70) return 1;
+  return (SPHERE_R+cloudK*ballExtra(b))/(SPHERE_R+cloudKBuilt*ballExtra(b)); };
+
+// The one representation this page draws. Residues group by (colour × opacity band) so the
+// style-call count stays small. Opacity is always the atom's FINAL confidence value -- nothing
+// animates alpha any more; the entrance animates size instead.
+function styleSpheres(withBonds, cloudMode){ if(!viewer) return;
+  // Styles are applied to THIS model, not through the viewer, so the Wobble tab's second
+  // model (the points) is never touched by a restyle of the protein.
+  model.setStyle({}, {});
+  // In cloud mode a low-confidence atom is drawn as its probability ball: a big, faint sphere
+  // whose radius is the space the atom could occupy. Everything else is unchanged.
+  const radOf=b=>(cloudMode && b<70) ? ballRadius(b,cloudKBuilt) : SPHERE_R;
+  const alpOf=b=>(cloudMode && b<70) ? ballAlpha(b,cloudKBuilt) : confA(b);
+  if(activeMode()==='element'){
+    // Element is the first scheme that varies WITHIN a residue, so it can't group by residue
+    // colour. Opacity and radius are still per-residue (they're pLDDT), so group residues into
+    // bands and cross each band with the elements actually present — 3Dmol's `elem` selector
+    // ANDs with `resi`, giving a handful of style calls rather than one per atom.
+    const bands=new Map();
+    for(let r=minResi;r<=maxResi;r++){ if(!(r in res2code)) continue;
+      const b=res2plddt[r]||100, a=alpOf(b), rad=radOf(b), key=a+'|'+rad;
+      if(!bands.has(key)) bands.set(key,{a,rad,list:[]}); bands.get(key).list.push(r); }
+    for(const g of bands.values())
+      for(const el of elemsPresent)
+        model.setStyle({elem:el, resi:g.list}, {sphere:{radius:g.rad, color:hex(elemColor(el)), opacity:g.a}}, true);
+    if(withBonds) model.setStyle({}, {line:{}}, true);
+    viewer.render(); return;
+  }
+  const groups=new Map();
+  for(let r=minResi;r<=maxResi;r++){ if(!(r in res2code)) continue;
+    const col=(activeMode()==='spectrum') ? rainbowHex((res2order[r]||0)/Math.max(1,N-1)) : resColor(r);
+    const b=res2plddt[r]||100, a=alpOf(b), rad=radOf(b);
+    const key=col+'|'+a+'|'+rad;
+    if(!groups.has(key)) groups.set(key,{col,a,rad,list:[]});
+    groups.get(key).list.push(r); }
+  for(const g of groups.values())
+    model.setStyle({resi:g.list}, {sphere:{radius:g.rad, color:hex(g.col), opacity:g.a}}, true);
+  // Bonds. 3Dmol derives this connectivity itself at parse time -- the AlphaFold files carry no
+  // CONECT records. Added inside the same style pass so it costs one geometry build, not two.
+  if(withBonds) model.setStyle({}, {line:{}}, true);
+  viewer.render();
+}
+
+// ═══════════════════ the reveal engine — atoms GROW in ═══════════════════
+// One mechanism, two orderings. Every atom starts at zero radius and swells to full size; the
+// order function decides who goes first, so the Protein tab sweeps centre-outward and Assemble
+// sweeps N→C along the chain.
+//
+// Size rather than opacity, because opacity is already spoken for: it carries pLDDT confidence,
+// and animating it would have meant every atom lying about its confidence until the entrance
+// finished. Radius is a free channel. It is also cheaper -- a sphere imposter's radius lives in
+// the normal array as the billboard's own corner offsets, so growing atoms is one normal-buffer
+// respecify per frame with no geometry rebuild.
+//
+// growScale/growOrder are indexed by atom.index (assigned by the PDB bond assignment pass), so
+// the per-frame scale lookup the library calls back into is a plain array read.
+let growTok=0, growScale=null, growOrder=null;
+const scaleOf = a => growScale[a.index];
+
+// Global animation-speed multiplier from the slider. Durations divide by it, per-frame steps
+// multiply by it, so 2x is twice as fast everywhere.
+let animSpeed=1;
+// How grown BOTH endpoints must be before their bond is drawn. At 0.5 the bonds follow clearly
+// behind the atoms rather than leading them.
+const BOND_THRESHOLD=0.5;
+
+function runGrow(orderFn, durSec, onFrame, guardTab){
+  if(!viewer||!M) return;
+  const tok=++growTok;
+  styleSpheres(true);           // the ONE build: final opacities, bonds included
+
+  let maxI=0; for(const a of atoms) if(a.index>maxI) maxI=a.index;
+  growScale=new Float32Array(maxI+1); growOrder=new Float32Array(maxI+1);
+  for(const a of atoms) growOrder[a.index]=orderFn(a);
+
+  const RAMP=0.18, DUR=(durSec/animSpeed)*1000, t0=performance.now();
+  const apply=()=>{
+    model.syncSphereRadii(scaleOf);
+    model.syncAtomPositions({scale:scaleOf, bondThreshold:BOND_THRESHOLD});
+    viewer.render();
+  };
+  const frame=()=>{ if(tok!==growTok || curTab!==guardTab) return;
+    const sweep=((performance.now()-t0)/DUR)*(1+RAMP);
+    for(const a of atoms){ let x=(sweep-growOrder[a.index])/RAMP; x=x<0?0:(x>1?1:x);
+      growScale[a.index]=x*x*(3-2*x); }   // smoothstep, so atoms ease into full size
+    apply();
+    if(onFrame) onFrame(sweep);
+    if(sweep<1+RAMP) requestAnimationFrame(frame);
+    else { for(const a of atoms) growScale[a.index]=1; apply(); }   // settle exactly at full size
+  };
+  frame();
+}
+
+// ═══════════════════ Protein — centre-out grow ═══════════════════
+// Order is each residue's distance from the centroid of residue means, normalized 0..1, so the
+// core finishes growing before the surface and the outer tendrils arrive last.
+function runSphereReveal(sec){
+  if(!viewer||!M) return;
+  const acc=new Map();
+  for(const a of atoms){ let m=acc.get(a.resi); if(!m){ m={x:0,y:0,z:0,n:0}; acc.set(a.resi,m); } m.x+=a.x;m.y+=a.y;m.z+=a.z;m.n++; }
+  let cx=0,cy=0,cz=0;
+  for(const m of acc.values()){ cx+=m.x/m.n; cy+=m.y/m.n; cz+=m.z/m.n; }
+  cx/=acc.size||1; cy/=acc.size||1; cz/=acc.size||1;
+  const dist=new Map(); let dmax=1e-9;
+  for(const [resi,m] of acc){ const dx=m.x/m.n-cx, dy=m.y/m.n-cy, dz=m.z/m.n-cz;
+    const d=Math.sqrt(dx*dx+dy*dy+dz*dz); dist.set(resi,d); if(d>dmax) dmax=d; }
+  runGrow(a=>(dist.get(a.resi)||0)/dmax, sec||2.6, null, 'explore');
+}
+
+// ═══════════════════ Assemble — sequence sweep N→C ═══════════════════
+const ASM_SECONDS=6;
+let seqbarEl=null, hiIdx=-1, buildF=0;
+function updateCursor(){ if(!seqbarEl) return; const hi=Math.min(N,Math.floor(buildF)); if(hi===hiIdx) return;
+  const sp=seqbarEl.children;
+  if(hiIdx>=1 && sp[hiIdx-1]) sp[hiIdx-1].className='';
+  if(hi>=1 && sp[hi-1]) sp[hi-1].className='cur';
+  hiIdx=hi; }
+function resetCursor(){ buildF=0; hiIdx=-1; if(seqbarEl) for(const s of seqbarEl.children) s.className=''; }
+// Same engine, ordered along the chain instead of outward, with the sequence cursor tracking the
+// sweep so the letter being read and the atoms appearing stay in step.
+function runAssemble(){
+  resetCursor();
+  runGrow(a=>(res2order[a.resi]||0)/Math.max(1,N-1), ASM_SECONDS,
+    sweep=>{ buildF=Math.min(N, sweep*Math.max(1,N-1)); updateCursor(); }, 'asm');
+}
+
+// ═══════════════════ Fold — coil → native morph ═══════════════════
+// Per-atom unfolded endpoint: a smoothed random-walk backbone (the same walk buildCoilPDB uses),
+// with each atom keeping its offset from its own Cα, so residues hold their shape while the
+// chain unravels. Computed once, in the model's own coordinate space.
+function buildFoldEndpoints(){
+  const caOrder=[], caByResi=new Map(), seen=new Set();
+  for(const a of atoms) if(a.atom==='CA' && !seen.has(a.resi)){ seen.add(a.resi); caOrder.push(a); caByResi.set(a.resi,a); }
+  let cx=0,cy=0,cz=0; for(const a of caOrder){cx+=a.x;cy+=a.y;cz+=a.z;}
+  const nc=caOrder.length||1; cx/=nc; cy/=nc; cz/=nc;
+  let maxd=1; for(const a of atoms) maxd=Math.max(maxd,Math.hypot(a.x-cx,a.y-cy,a.z-cz));
+
+  const hr=n=>{const v=Math.sin(n*127.1+0.7)*43758.5453;return v-Math.floor(v);};
+  let dx=1,dy=0,dz=0,wx=0,wy=0,wz=0; const pts=[];
+  for(let i=0;i<caOrder.length;i++){ dx+=(hr(i)*2-1)*0.6; dy+=(hr(i+11)*2-1)*0.6; dz+=(hr(i+23)*2-1)*0.6;
+    const L=Math.hypot(dx,dy,dz)||1; dx/=L;dy/=L;dz/=L; wx+=dx*3.8;wy+=dy*3.8;wz+=dz*3.8; pts.push([wx,wy,wz]); }
+  for(let pass=0;pass<9;pass++){ const q=pts.map(p=>p.slice());
+    for(let i=1;i<pts.length-1;i++) for(let d=0;d<3;d++) pts[i][d]=q[i][d]*0.5+q[i-1][d]*0.25+q[i+1][d]*0.25; }
+  let mx=0,my=0,mz=0; for(const p of pts){mx+=p[0];my+=p[1];mz+=p[2];}
+  const np=pts.length||1; mx/=np;my/=np;mz/=np;
+  let ext=1; for(const p of pts){ p[0]-=mx;p[1]-=my;p[2]-=mz; ext=Math.max(ext,Math.hypot(p[0],p[1],p[2])); }
+  const csc=(maxd*1.4)/ext;
+  const coilByResi=new Map();
+  caOrder.forEach((a,i)=>{ const p=pts[i]; coilByResi.set(a.resi,[cx+p[0]*csc, cy+p[1]*csc, cz+p[2]*csc]); });
+
+  foldXYZ=new Float32Array(M*3); coilXYZ=new Float32Array(M*3);
+  for(let i=0;i<M;i++){ const a=atoms[i], k=i*3, ca=caByResi.get(a.resi), c=coilByResi.get(a.resi);
+    foldXYZ[k]=a.x; foldXYZ[k+1]=a.y; foldXYZ[k+2]=a.z;
+    if(ca&&c){ coilXYZ[k]=c[0]+(a.x-ca.x); coilXYZ[k+1]=c[1]+(a.y-ca.y); coilXYZ[k+2]=c[2]+(a.z-ca.z); }
+    else { coilXYZ[k]=a.x; coilXYZ[k+1]=a.y; coilXYZ[k+2]=a.z; } }
+}
+// e = 0 unfolded coil, 1 native. Writes the ATOM objects, so CPU-side state stays truthful;
+// syncSpherePositions() then mirrors them into the imposter vertex buffer.
+function setFoldCoords(e){
+  for(let i=0;i<M;i++){ const a=atoms[i], k=i*3;
+    a.x=coilXYZ[k]+(foldXYZ[k]-coilXYZ[k])*e;
+    a.y=coilXYZ[k+1]+(foldXYZ[k+1]-coilXYZ[k+1])*e;
+    a.z=coilXYZ[k+2]+(foldXYZ[k+2]-coilXYZ[k+2])*e; }
+}
+let foldTok=0, foldF=0;
+function runFold(){
+  if(!viewer||!M) return;
+  const tok=++foldTok;
+  if(!foldXYZ) buildFoldEndpoints();
+  foldF=0;
+  setFoldCoords(0);
+  // Bonds travel with the atoms: a line's two vertices are just lerp(a1, a2, t) at t=0 and t=1,
+  // the same recipe the spheres use, so syncAtomPositions() moves them in the same pass.
+  styleSpheres(true);                   // build geometry at the unfolded pose, bonds included
+  viewer.zoomTo(); viewer.render();     // frame the coil once; the camera then holds still
+  if(model.syncAtomPositions()===false)
+    window.__err('syncAtomPositions() refused — geometry not fully trackable; fold will not animate');
+  const frame=()=>{ if(tok!==foldTok || curTab!=='fold') return;
+    foldF=Math.min(1, foldF+0.006*animSpeed);
+    const e=foldF*foldF*(3-2*foldF);
+    setFoldCoords(e);
+    model.syncAtomPositions();          // in-place position update — no geometry rebuild
+    viewer.render();
+    if(foldF<1) requestAnimationFrame(frame);
+  };
+  frame();
+}
+// Leaving Fold: snap the coordinates back to native so the other tabs see the real structure.
+function restoreNative(){
+  if(!foldXYZ||!M) return;
+  setFoldCoords(1);
+  if(model.syncAtomPositions) model.syncAtomPositions();
+}
+
+// ═══════════════════ Wobble — the distribution, and the sway ═══════════════════
+// This tab does not animate atoms. It renders WHERE THEY COULD BE: confident atoms as spheres,
+// uncertain ones as probability balls (see ballRadius/ballAlpha), the whole body swaying along
+// its collective modes. Directions arrive precomputed (wobble.py -> wobble/<ACC>.bin): an
+// Anisotropic Network Model over the pLDDT>=70 alpha-carbons, its lowest well-spread modes
+// carried out rigidly to every atom; tail atoms ride their nearest confident residue. Each frame
+//     x = x0 + sum_k  A_k · sin(w_k·t + phi_k) · v_k
+// Amplitude and frequency follow the mode's stiffness: A_k ∝ 1/sqrt(stiffness) so soft modes
+// swing wider (equipartition), w_k ∝ sqrt(stiffness) so they also swing slower.
+//
+// Two SOURCES of frames: an AlphaFold model sways as above; a multi-model file (TRAJ > 1) plays
+// its own recorded frames through setFrame(). Two PATHS to the screen, chosen by the toggle:
+//   replay   coordinates go into the existing geometry in place (syncAtomPositions, or
+//            setFrame {fast:true}); nothing is rebuilt
+//   rebuild  every frame discards the geometry and regenerates it (a full restyle, or plain
+//            setFrame) -- what trajectory playback costs today
+// The dashboard under the legend samples every frame: wall time of update+draw, bytes of typed
+// arrays allocated (the counter at the head of the page), the share of the frame interval the
+// main thread spent busy, and the achieved rate. GC and CPU time are not readable from inside a
+// page and are deliberately not shown.
+let wobbleTok=0, wobbleModes=null, wobbleX0=null, wobbleRebuild=false, wobbleMode='replay', trajF=0;
+const WOBBLE_PEAK_A=1.0;                      // angstrom: peak sway of the softest mode
+const WOBBLE_PERIOD_S=4.0;                    // seconds per cycle of that mode at 1x
+
+// ── dashboard ──
+const DASH_N=60;                              // bars kept per sparkline
+const dash={frame:0, ms:[], alloc:[], busy:[], last:0};
+function spark(id, arr, fixedMax){
+  const c=document.getElementById(id), g=c.getContext('2d'), W=c.width, H=c.height, bw=W/DASH_N;
+  g.clearRect(0,0,W,H);
+  const m=Math.max(fixedMax||0, ...arr, 1e-9);
+  for(let i=0;i<arr.length;i++){ const h=Math.max(2,(arr[i]/m)*(H-2));
+    g.fillStyle = (i===arr.length-1) ? '#f0b54a' : '#3b5f8a'; g.fillRect(i*bw+1, H-h, bw-2, h); }
+}
+function dashPush(ms, bytes, interval){
+  const mb=bytes/1048576, busy=Math.min(100, 100*ms/Math.max(interval,1e-6));
+  dash.frame++; dash.ms.push(ms); dash.alloc.push(mb); dash.busy.push(busy);
+  for(const k of ['ms','alloc','busy']) if(dash[k].length>DASH_N) dash[k].shift();
+  document.getElementById('dFrame').textContent=dash.frame;
+  document.getElementById('dMs').textContent=ms.toFixed(1);
+  document.getElementById('dAlloc').textContent=mb.toFixed(2);
+  document.getElementById('dBusy').textContent=busy.toFixed(0);
+  document.getElementById('dFps').textContent=(1000/Math.max(interval,1e-6)).toFixed(0);
+  spark('cMs',dash.ms); spark('cAlloc',dash.alloc); spark('cBusy',dash.busy,100);
+}
+function dashReset(){ dash.frame=0; dash.ms=[]; dash.alloc=[]; dash.busy=[]; dash.last=0;
+  for(const id of ['dMs','dAlloc','dBusy','dFps']) document.getElementById(id).textContent='—';
+  document.getElementById('dFrame').textContent='0';
+  for(const id of ['cMs','cAlloc','cBusy']) spark(id,[]); }
+
+async function loadWobble(){
+  if(wobbleModes) return wobbleModes;
+  const acc=ACC||'O05011';
+  const r=await fetch('wobble/'+acc+'.bin');
+  if(!r.ok) throw new Error('no wobble/'+acc+'.bin — run: .venv-wobble\\Scripts\\python wobble.py '+acc);
+  const buf=await r.arrayBuffer(), dv=new DataView(buf);
+  const n=dv.getUint32(0,true), k=dv.getUint32(4,true); let o=8;
+  const eigval=new Float32Array(buf,o,k); o+=4*k;
+  const first=new Float32Array(buf,o,3); o+=12;
+  const last=new Float32Array(buf,o,3);  o+=12;
+  const vec=new Float32Array(buf,o,k*n*3);
+
+  // Native pose, captured once. Every other tab restores to native before this one runs, and
+  // this tab restores on leave, so `atoms` is native here.
+  if(!wobbleX0){ wobbleX0=new Float32Array(M*3);
+    for(let i=0;i<M;i++){ const a=atoms[i], b=i*3; wobbleX0[b]=a.x; wobbleX0[b+1]=a.y; wobbleX0[b+2]=a.z; } }
+  // Alignment guard: the file must describe THESE atoms in THIS order, or the sway lands on the
+  // wrong atoms. Refuse rather than jitter a lie.
+  const near=(b,p)=>Math.abs(wobbleX0[b]-p[0])<1e-3&&Math.abs(wobbleX0[b+1]-p[1])<1e-3&&Math.abs(wobbleX0[b+2]-p[2])<1e-3;
+  if(n!==M || !near(0,first) || !near((M-1)*3,last))
+    throw new Error('wobble/'+acc+'.bin does not match this structure ('+n+' atoms in file, '+M+' drawn)');
+
+  // Vectors arrive with each mode's longest arrow at 1.0, so amp is directly in angstrom.
+  const amp=new Float64Array(k), omega=new Float64Array(k);
+  for(let m=0;m<k;m++){ const ratio=Math.sqrt(eigval[0]/eigval[m]);
+    amp[m]=WOBBLE_PEAK_A*ratio; omega[m]=(2*Math.PI/WOBBLE_PERIOD_S)/ratio; }
+  wobbleModes={n,k,eigval,vec,amp,omega,phase:null};
+  return wobbleModes;
+}
+// Sway of the whole model at time t. md=null restores the native pose.
+function setWobbleCoords(t, md){
+  if(!md){ for(let i=0;i<M;i++){ const a=atoms[i], b=i*3; a.x=wobbleX0[b]; a.y=wobbleX0[b+1]; a.z=wobbleX0[b+2]; } return; }
+  const {n,k,vec,amp,omega,phase}=md, s=new Float64Array(k);
+  for(let m=0;m<k;m++) s[m]=amp[m]*Math.sin(omega[m]*t+phase[m]);
+  for(let i=0;i<M;i++){ const a=atoms[i], b=i*3; let dx=0,dy=0,dz=0;
+    for(let m=0;m<k;m++){ const q=(m*n+i)*3, w=s[m]; dx+=vec[q]*w; dy+=vec[q+1]*w; dz+=vec[q+2]*w; }
+    a.x=wobbleX0[b]+dx; a.y=wobbleX0[b+1]+dy; a.z=wobbleX0[b+2]+dz; }
+}
+// One frame, measured: update + one draw, with the allocation counter on for exactly that span.
+// Both paths do exactly one draw, so their frame times compare like for like.
+async function wobbleStep(t, md){
+  const t0=performance.now(), interval = dash.last ? (t0-dash.last) : 0; dash.last=t0;
+  window.__alloc.bytes=0; window.__alloc.counting=true;
+  if(TRAJ>1){
+    trajF=(trajF+1)%TRAJ;
+    await model.setFrame(trajF, {fast: wobbleMode==='replay'});   // rebuild: plain setFrame discards the geometry
+    viewer.render();
+  } else {
+    setWobbleCoords(t, md);
+    if(wobbleMode==='replay'){ model.syncAtomPositions(); viewer.render(); }
+    else { cloudKBuilt=cloudK; styleSpheres(true, true); }         // full regeneration; styleSpheres draws once
+  }
+  window.__alloc.counting=false;
+  dashPush(performance.now()-t0, window.__alloc.bytes, interval || (performance.now()-t0));
+}
+// Runs until the tab changes. `rephase` (replay) re-rolls the sway phases so the blend differs.
+function runWobble(rephase){
+  if(!viewer||!M) return;
+  const tok=++wobbleTok;
+  const start=async md=>{
+    if(tok!==wobbleTok || curTab!=='wobble') return;
+    dashReset();
+    if(TRAJ>1){ trajF=0; await model.setFrame(0); }
+    else { if(rephase||!md.phase) md.phase=Array.from({length:md.k},()=>Math.random()*2*Math.PI); setWobbleCoords(0,null); }
+    cloudKBuilt=cloudK; styleSpheres(true, true);   // the ONE build: balls for the uncertain, bonds included
+    viewer.zoomTo(); viewer.render();
+    if(TRAJ<=1 && model.syncAtomPositions()===false){ window.__err('syncAtomPositions() refused — geometry not fully trackable; wobble will not animate'); return; }
+    let t=0, last=performance.now();
+    const frame=async()=>{ if(tok!==wobbleTok || curTab!=='wobble') return;
+      const now=performance.now(); t+=((now-last)/1000)*animSpeed; last=now;   // slider changes tempo, not phase
+      if(wobbleRebuild){ wobbleRebuild=false; cloudKBuilt=cloudK; styleSpheres(true, true); }   // slider released
+      await wobbleStep(t, md);
+      if(tok===wobbleTok) requestAnimationFrame(frame);
+    };
+    frame();
+  };
+  (TRAJ>1 ? Promise.resolve(null) : loadWobble()).then(start).catch(e=>window.__err(String(e.message||e)));
+}
+function restoreWobbleNative(){
+  if(TRAJ>1){ model.setFrame(0); return; }            // back to frame 0; the next render rebuilds
+  if(!wobbleX0||!M) return;
+  setWobbleCoords(0,null);
+  if(model.syncAtomPositions) model.syncAtomPositions();
+}
+
+// ═══════════════════ Atoms — every atom centre as a bead ═══════════════════
+// Points. 3Dmol has no point primitive, and the two things that come close fail differently:
+// `cross` is unlit but is literally three line segments, so it reads as a star at any size you
+// can actually see; a sphere imposter is round but lit. A sphere small enough to be a point is
+// only a couple of pixels across, at which size the shading is imperceptible and it just reads
+// as a dot -- so tiny spheres it is. POINT_SCALE is the knob: lower is more point-like.
+//
+// The three.js version varied gl_PointSize per atom via an `asize` attribute and used
+// sizeAttenuation:false, so dots stayed one screen size regardless of depth. These are
+// world-space, so distance shrinks them, which reads as an extra depth cue rather than a loss.
+//
+// Colour follows the scheme dropdown like every other view. The radial brightness falloff is kept
+// on top of it -- that is what gives the cloud its depth read, bright core dimming outward -- but
+// it modulates the scheme's colour rather than replacing it with the old fixed amber ramp.
+const ATOM_COL_STEPS=16, ATOM_R_STEPS=4, POINT_SCALE=0.40;
+function radialDim(t){ return 1-0.5*t*t; }   // gentle: keeps scheme hues identifiable at the rim
+function styleAtomCloud(){
+  if(!viewer||!M) return;
+  let cx=0,cy=0,cz=0; for(const a of atoms){cx+=a.x;cy+=a.y;cz+=a.z;}
+  cx/=M; cy/=M; cz/=M;
+  let maxd=1e-9; for(const a of atoms) maxd=Math.max(maxd,Math.hypot(a.x-cx,a.y-cy,a.z-cz));
+
+  // point radius in Angstrom: the original's 1.4/(2d+0.33) px falloff, rescaled to the molecule
+  const rMin=maxd*0.0045*POINT_SCALE, rMax=maxd*0.0135*POINT_SCALE;
+  // select per-atom, not per-residue: prefer serial, fall back to index if the parser omitted it
+  const idField = (atoms[0].serial!==undefined) ? 'serial' : 'index';
+  const groups=new Map();
+  for(const a of atoms){
+    const d=Math.hypot(a.x-cx,a.y-cy,a.z-cz)/maxd;
+    const base=(activeMode()==='element') ? elemColor(a.elem)
+             : (activeMode()==='spectrum') ? rainbowHex((res2order[a.resi]||0)/Math.max(1,N-1))
+             : resColor(a.resi);
+    const dim=radialDim(Math.round(d*ATOM_COL_STEPS)/ATOM_COL_STEPS);   // quantized so groups stay few
+    const col=(Math.round(((base>>16)&255)*dim)<<16)|(Math.round(((base>>8)&255)*dim)<<8)|Math.round((base&255)*dim);
+    const sz=Math.max(0,Math.min(1,(1.4/(d*2+0.33)-1.3)/2.9));       // 0..1 over the original 1.3..4.2 range
+    const rk=Math.round(sz*(ATOM_R_STEPS-1));
+    const key=col+'|'+rk;
+    if(!groups.has(key)) groups.set(key,{col, r:rMin+(rMax-rMin)*(rk/(ATOM_R_STEPS-1)), list:[]});
+    groups.get(key).list.push(a[idField]);
+  }
+  viewer.setStyle({}, {});
+  for(const g of groups.values()){
+    const sel={}; sel[idField]=g.list;
+    viewer.addStyle(sel, {sphere:{radius:g.r, color:hex(g.col)}});
+  }
+  viewer.render();
+}
+
+// ═══════════════════ tabs + legend ═══════════════════
+const CONF_BANDS=[['solid · pLDDT ≥90',0x9aa3ad],['0.75 · ≥70',0x7c8896],['0.40 · ≥50',0x5a6470],['ghost · <50',0x39414c]];
+function updateLegend(){ const el=document.getElementById('legend'); let items=null;
+  const mode=activeMode();
+  if(mode==='ss') items=[['α-helix',SS_H],['β-strand',SS_E],['coil',SS_C]];
+  else if(mode==='element') items=elemsPresent.map(el=>[(ELEM_NAME[el]||el)+' ('+el+')', elemColor(el)]);
+  else if(mode==='segdom'){ const ks=[...new Set(Object.values(res2dom_gen))].sort(); items=ks.map(d=>['domain '+(d+1),DOMG[d%DOMG.length]]); }
+  // Protein, Assemble & Fold carry confidence as translucency — the legend says so. The Atoms
+  // cloud is opaque (its shading is depth, not confidence), so the bands would be a lie there.
+  if(curTab!=='atoms') items=(items||[]).concat(CONF_BANDS);
+  if(!items){ el.style.display='none'; return; }
+  el.innerHTML=items.map(([l,c])=>'<div class="row"><span class="sw" style="background:'+hex(c)+'"></span>'+l+'</div>').join('');
+  el.style.display='block';
+}
+
+const tabExplore=document.getElementById('tabExplore'), tabAsm=document.getElementById('tabAsm'),
+      tabFold=document.getElementById('tabFold'), tabAtoms=document.getElementById('tabAtoms'),
+      tabWobble=document.getElementById('tabWobble');
+function showTab(which){
+  const explore=which==='explore', asm=which==='asm', fold=which==='fold', atomsTab=which==='atoms', wobble=which==='wobble';
+  tabExplore.classList.toggle('on',explore); tabAsm.classList.toggle('on',asm);
+  tabFold.classList.toggle('on',fold); tabAtoms.classList.toggle('on',atomsTab); tabWobble.classList.toggle('on',wobble);
+  document.getElementById('explore').style.display=explore?'block':'none';
+  document.getElementById('asm').style.display=asm?'block':'none';
+  document.getElementById('fold').style.display=fold?'block':'none';
+  document.getElementById('atoms').style.display=atomsTab?'block':'none';
+  document.getElementById('wobble').style.display=wobble?'block':'none';
+  document.getElementById('ctrls').style.display='flex';
+  document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
+  document.getElementById('modeBox').style.display=wobble?'flex':'none';
+  document.getElementById('dash').style.display=wobble?'block':'none';
+  document.getElementById('seqbar').style.display=asm?'block':'none';
+
+  const leavingFold = curTab==='fold' && !fold;
+  const leavingWobble = curTab==='wobble' && !wobble;
+  curTab=which;
+  growTok++; foldTok++; wobbleTok++;   // cancel whatever animation was running
+  if(leavingFold) restoreNative();
+  if(leavingWobble) restoreWobbleNative();
+
+  if(fold){ runFold(); }
+  else if(wobble){ runWobble(false); }
+  else if(asm){ viewer.zoomTo(); runAssemble(); }
+  else if(atomsTab){ viewer.zoomTo(); styleAtomCloud(); }
+  else { viewer.zoomTo(); runSphereReveal(); }
+  updateLegend();
+}
+tabExplore.onclick=()=>showTab('explore'); tabAsm.onclick=()=>showTab('asm');
+tabFold.onclick=()=>showTab('fold'); tabAtoms.onclick=()=>showTab('atoms');
+tabWobble.onclick=()=>showTab('wobble');
+
+// One replay for whichever view is showing, instead of a button per panel.
+function replayCurrent(){
+  if(!viewer||!M) return;
+  if(curTab==='fold') runFold();
+  else if(curTab==='wobble') runWobble(true);   // re-roll the phases
+  else if(curTab==='asm') runAssemble();
+  else if(curTab==='atoms') styleAtomCloud();   // static view: just restyle
+  else runSphereReveal();
+}
+document.getElementById('replay').onclick=replayCurrent;
+
+const spd=document.getElementById('spd'), spdVal=document.getElementById('spdVal');
+spd.oninput=()=>{ animSpeed=parseFloat(spd.value); spdVal.textContent=animSpeed.toFixed(2).replace(/0$/,'')+'×'; };
+spd.oninput();
+
+// Confidence radius: rescale the balls in place while dragging (no rebuild), and rebuild once on
+// release so their opacity follows the new radius.
+const confR=document.getElementById('confR'), confRVal=document.getElementById('confRVal');
+confR.oninput=()=>{ cloudK=parseFloat(confR.value); confRVal.textContent=cloudK.toFixed(2).replace(/0$/,'')+'×';
+  if(curTab==='wobble' && model){ model.syncSphereRadii(ballScale); viewer.render(); } };
+confR.onchange=()=>{ if(curTab==='wobble') wobbleRebuild=true; };
+confR.oninput();
+
+// Path switch: fast path (replay in place) or rebuild every frame (the existing path). Flipping
+// it restarts the animation COLD -- geometry built from scratch at frame 0, dashboard cleared --
+// so nothing from the other path is carried over, and a cold start can be watched on demand.
+const modeFast=document.getElementById('modeFast'), modeRebuild=document.getElementById('modeRebuild');
+function setPath(m){
+  if(m===wobbleMode) return;
+  wobbleMode=m;
+  modeFast.classList.toggle('on', m==='replay'); modeRebuild.classList.toggle('on', m==='rebuild');
+  if(curTab==='wobble') runWobble(false);
+}
+modeFast.onclick=()=>setPath('replay'); modeRebuild.onclick=()=>setPath('rebuild');
+
+const cmodeSel=document.getElementById('cmode');
+cmodeSel.onchange=()=>{ colorMode=cmodeSel.value; replayCurrent(); updateLegend(); };
+
+// header — UniProt names arrive as "Recommended (alt1) (alt2) (…)"; show only the primary.
+const SHORT_NAME=(NAME||'').split(' (')[0];
+document.getElementById('pttl').textContent = SHORT_NAME || (REF?'NqrB · subunit B':ACC);
+if(NAME) document.getElementById('pttl').title = NAME;
+document.getElementById('pacc').textContent = ACC || 'O05011';
+
+// ═══════════════════ load + parse ═══════════════════
+async function loadPDB(){
+  if(!ACC || ACC==='O05011') return (await fetch('O05011_af.pdb')).text();
+  const local=await fetch('structures/'+ACC+'.pdb'); if(local.ok) return local.text();
+  const meta=await (await fetch('https://alphafold.ebi.ac.uk/api/prediction/'+ACC)).json();
+  return (await fetch(meta[0].pdbUrl)).text();
+}
+// live SS (Cα proxy for DSSP) + rough domain split, so colouring modes have data
+function computeMaps(caOrder){
+  const n=caOrder.length, ss=new Array(n).fill('C');
+  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
+  for(let i=0;i<n;i++) if(i+4<n && d(caOrder[i],caOrder[i+4])<6.5){ for(let k=i;k<=i+4;k++) ss[k]='H'; }
+  for(let i=0;i<n;i++) if(i+3<n && ss[i]==='C' && d(caOrder[i],caOrder[i+3])>9.5 && d(caOrder[i],caOrder[i+2])>6.0) ss[i]='E';
+  for(let i=0;i<n;i++) res2ss[caOrder[i].resi]=ss[i];
+  N=n;
+  const k=Math.max(1,Math.min(4,Math.round(n/130)));
+  if(k===1){ for(const a of caOrder) res2dom_gen[a.resi]=0; }
+  else { let cen=[]; for(let j=0;j<k;j++){ const a=caOrder[Math.floor((j+0.5)/k*n)]; cen.push([a.x,a.y,a.z]); }
+    const asn=new Array(n).fill(0);
+    for(let it=0;it<12;it++){
+      for(let i=0;i<n;i++){ const a=caOrder[i]; let best=0,bd=1e18;
+        for(let j=0;j<k;j++){ const dx=a.x-cen[j][0],dy=a.y-cen[j][1],dz=a.z-cen[j][2],dd=dx*dx+dy*dy+dz*dz; if(dd<bd){bd=dd;best=j;} } asn[i]=best; }
+      const s=Array.from({length:k},()=>[0,0,0,0]);
+      for(let i=0;i<n;i++){ const a=caOrder[i],j=asn[i]; s[j][0]+=a.x;s[j][1]+=a.y;s[j][2]+=a.z;s[j][3]++; }
+      for(let j=0;j<k;j++) if(s[j][3]) cen[j]=[s[j][0]/s[j][3],s[j][1]/s[j][3],s[j][2]/s[j][3]]; }
+    for(let i=0;i<n;i++) res2dom_gen[caOrder[i].resi]=asn[i]; }
+}
+
+loadPDB().then(pdb=>{
+  viewer=$3Dmol.createViewer(document.getElementById('mol'), {backgroundColor:'#0a0e13', backgroundAlpha:0, antialias:true});
+  // A multi-model PDB (MODEL/ENDMDL blocks) is a trajectory: every model becomes a frame of one
+  // GLModel, and the Wobble tab plays them. Every other tab sees frame 0.
+  const nModels=(pdb.match(/^MODEL /mg)||[]).length;
+  if(nModels>1) viewer.addModelsAsFrames(pdb,'pdb'); else viewer.addModel(pdb,'pdb');
+  model=viewer.getModel();
+  TRAJ = nModels>1 ? model.getNumFrames() : 0;
+  // Derive every map from the MODEL's atom list, not a second hand-rolled PDB parse. This is the
+  // exact list createMolObj walks, which is what makes the alphaArray quad↔atom mapping safe.
+  atoms=model.selectedAtoms({});
+  M=atoms.length;
+
+  const caOrder=[], seen=new Set(), elemCount=new Map();
+  for(const a of atoms){
+    res2code[a.resi]=THREE_TO_ONE[a.resn]||'X';
+    res2plddt[a.resi]=(a.b===undefined?0:a.b);
+    if(a.elem) elemCount.set(a.elem,(elemCount.get(a.elem)||0)+1);
+    if(a.atom==='CA' && !seen.has(a.resi)){ seen.add(a.resi); caOrder.push(a); }
+  }
+  // A file whose B column is all zero carries no confidence at all (not an AlphaFold model):
+  // treat every residue as confident rather than drawing the whole thing as ghost.
+  if(atoms.every(a=>!a.b)) for(const r in res2plddt) res2plddt[r]=100;
+  // frequency order, so the legend reads carbon → nitrogen → oxygen → sulfur for a protein
+  elemsPresent=[...elemCount.entries()].sort((p,q)=>q[1]-p[1]).map(e=>e[0]);
+  if(!caOrder.length){ window.__err('no Cα atoms parsed'); return; }
+  minResi=Math.min(...caOrder.map(a=>a.resi)); maxResi=Math.max(...caOrder.map(a=>a.resi));
+  computeMaps(caOrder);
+  caOrder.forEach((a,i)=>res2order[a.resi]=i);
+
+  seqbarEl=document.getElementById('seqbar');
+  seqbarEl.innerHTML=caOrder.map(a=>'<span>'+(res2code[a.resi]||'X')+'</span>').join('');
+  document.getElementById('asmN').textContent=N;
+
+  viewer.setViewStyle({style:'outline', color:'black', width:0.05});
+  styleSpheres(true);
+  viewer.zoomTo(); viewer.zoom(1.12); viewer.render();
+
+  if(typeof model.syncAtomPositions!=='function')
+    window.__err('syncAtomPositions() missing — this 3Dmol.js build predates it (needs 3.0.0 or later). Fold will be slow.');
+
+  updateLegend();
+  const tb=P.get('tab');
+  showTab((tb==='asm'||tb==='fold'||tb==='atoms'||tb==='wobble') ? tb : 'explore');
+
+}).catch(e=>window.__err('load failed: '+e));
+</script>
+<script>
+// The page's own wiring: back to the library, the title, and the stage's size.
+(function () {
+  document.getElementById('back').addEventListener('click', () => { location.href = 'catalog.html'; });
+  // A protein without a name shows its accession as the title; the "UniProt <acc>" beside it would only repeat it.
+  const ttl = document.getElementById('pttl'), acc = document.getElementById('pacc');
+  const same = () => { acc.parentElement.hidden = ttl.textContent.trim() === acc.textContent.trim(); };
+  new MutationObserver(same).observe(ttl, { childList: true, characterData: true, subtree: true });
+  new MutationObserver(same).observe(acc, { childList: true, characterData: true, subtree: true });
+  // 3Dmol follows the browser window by itself; the stage can also change size with the layout, so tell it.
+  new ResizeObserver(() => { if (typeof viewer !== 'undefined' && viewer) viewer.resize(); }).observe(document.getElementById('mol'));
+})();
+</script>
+</body>
+</html>

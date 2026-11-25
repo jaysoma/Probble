@@ -3,52 +3,60 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>AlphaFold structure library · by fold class</title>
+<title>Probble · AlphaFold structure library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="probble.css">
 <style>
-  :root{ --bg:#0a0e13; --panel:#0e141d; --line:#1d2735; --text:#c7cdd6; --muted:#7488a0;
-         --a:#ff7e5a; --b:#4f9bff; --ab:#46d1a0; --few:#8aa0b8; }
-  *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif}
-  header{position:sticky;top:0;z-index:5;background:#0a0e13ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:16px 28px}
-  header h1{margin:0;font-size:17px;font-weight:600;color:#eaf2fb}
-  header .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
-  #q{margin-top:11px;width:100%;max-width:520px;background:#121a26;border:1px solid #25344b;border-radius:8px;
-     padding:9px 13px;color:#eaf2fb;font:14px 'Segoe UI',system-ui;outline:none}
-  #q:focus{border-color:#4f86c6}
-  #q::placeholder{color:#5f7388}
-  #featured{padding:18px 28px 4px}
-  #featured .fhead{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#7488a0;margin-bottom:10px}
-  .fcard{display:block;text-decoration:none;color:inherit;background:#13233a;border:1px solid #2f4f7f;
-    border-left:4px solid #49d18a;border-radius:10px;padding:14px 16px;max-width:560px;transition:border-color .12s}
-  .fcard:hover{border-color:#49d18a}
-  .fcard .nm{font-size:15px;color:#eaf2fb;font-weight:600;display:flex;align-items:center;gap:10px}
-  .fcard .badge{font:11px Consolas,monospace;color:#49d18a;border:1px solid #2c5a44;border-radius:5px;padding:2px 7px}
-  .fcard .meta{margin-top:6px;font:12px Consolas,monospace;color:#7488a0} .fcard .meta b{color:#9fb3c8}
-  main{padding:8px 28px 60px}
-  .grp{margin-top:26px}
-  .grp h2{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;margin:0 0 12px;display:flex;align-items:center;gap:10px}
-  .grp h2 .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
-  .grp h2 .ct{color:var(--muted);font-size:12px;letter-spacing:0;text-transform:none}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:11px}
-  .card{display:block;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);
-        border-left-width:4px;border-radius:9px;padding:11px 13px;cursor:pointer;transition:border-color .12s,transform .08s}
-  .card:hover{border-color:#3a567f;transform:translateY(-1px)}
-  .card .nm{font-size:13.5px;color:#eaf2fb;line-height:1.35;max-height:2.7em;overflow:hidden}
-  .card .meta{margin-top:7px;font:11.5px Consolas,monospace;color:var(--muted);display:flex;justify-content:space-between}
-  .card .meta b{color:#9fb3c8;font-weight:600}
-  #empty{color:var(--muted);padding:30px 0;display:none}
-  #empty b{color:#eaf2fb}
+  /* The library: the four fold classes are the sidebar's tags and every structure is a card. Probble's own flat look
+     (probble.css, Jay 2026-11-24: "We'll need a barebones one"); it was a glass window on HomePage's desktop kit before. */
+  :root { --a: #ff7e5a; --b: #4f9bff; --ab: #46d1a0; --few: #8aa0b8; }
+  #win-fv .lg-search input { width: 230px; }
+  .fv-tag::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--tag); }
+  .fv-count { margin-left: auto; font-size: 11px; color: var(--lg-text-3); font-variant-numeric: tabular-nums; }
+  .fv-grp h2 { display: flex; align-items: center; gap: 8px; margin: 16px 4px 10px; font-size: 13px; font-weight: 700; color: var(--lg-text-2); }
+  .fv-grp h2 .ct { font-weight: 500; color: var(--lg-text-3); }
+  #empty { display: none; padding: 30px 6px; color: var(--lg-text-2); }
+  #empty b { color: var(--lg-text); }
 </style>
 </head>
-<body>
-<header>
-  <h1>AlphaFold structure library</h1>
-  <div class="sub" id="sub">loading…</div>
-  <input id="q" placeholder="search by name…  or type any UniProt accession (e.g. P69905) to open it" autocomplete="off" spellcheck="false"/>
-</header>
-<!-- The "step the paper" DPAM walkthrough was stripped 2026-08-09 (git 41caa40 has it whole);
-     its page lives on as explore.html — the four-tab renderer every card opens. -->
-<main id="main"></main>
-<div id="empty" style="padding:0 28px"><b id="qval"></b> isn't in the library — looks like an accession; opening it on-demand…</div>
+<body class="lg-desktop">
+<main class="lg-workspace" id="workspace">
+  <section class="lg-window" id="win-fv" aria-label="AlphaFold structure library">
+    <aside data-level="1" class="lg-sidebar" data-drag>
+      <div class="lg-traffic">
+        <button class="lg-tl lg-tl-close" aria-label="Close"></button>
+        <button class="lg-tl lg-tl-min" aria-label="Minimize"></button>
+        <button class="lg-tl lg-tl-zoom" aria-label="Zoom"></button>
+      </div>
+      <div class="lg-side-head">Library</div>
+      <button class="lg-side-item is-selected" data-cls=""><svg viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>All Structures<span class="fv-count" id="ct-all"></span></button>
+      <div class="lg-side-head">Fold classes</div>
+      <div id="fv-tags"></div>
+    </aside>
+    <div class="lg-main">
+      <div class="lg-toolbar" data-drag>
+        <div data-level="1" class="lg-capsule">
+          <button disabled aria-label="Back"><svg viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></svg></button>
+          <button disabled aria-label="Forward"><svg viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg></button>
+        </div>
+        <h1 class="lg-title">AlphaFold structure library</h1>
+        <span class="lg-spacer"></span>
+        <label data-level="1" class="lg-search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+          <input id="q" placeholder="Search, or a UniProt accession" autocomplete="off" spellcheck="false"/>
+        </label>
+      </div>
+      <div class="lg-content">
+        <div id="main"></div>
+        <div id="empty"><b id="qval"></b> isn't in the library. It looks like an accession: press Enter to open it on demand.</div>
+      </div>
+      <!-- NO LINE AT THE FOOT (Jay, 2026-11-14: "no need for those windows with texts at the very bottom ... Remove the text at the bottom"): the counts
+           under the library went; the sidebar has them. .lg-content is HomePage's main pane, so the library ends on the window's foot and scrolls there -->
+    </div>
+  </section>
+</main>
 
 <script>
 const CLS = [
@@ -58,49 +66,71 @@ const CLS = [
   {key:'Few SS',       label:'Few SS',   varc:'--few'},
 ];
 const ACC_RE = /^[A-NR-Z][0-9][A-Z0-9]{3}[0-9]$|^[OPQ][0-9][A-Z0-9]{3}[0-9]$/i;
+// TEMPORARY: cards open the all-3Dmol renderer (three.js removed) instead of explore.html, so a
+// real catalog protein flows straight into it. Options: '3DMolProtein.html' (all-3Dmol),
+// 'foldbench.html' (the morph benchmark), 'explore.html' (the original three.js build).
+const TARGET = '3DMolProtein.html';
 let ROWS = [];
+let ONLY = '';                       // the sidebar's fold class ('' = every class)
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function cssv(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+// Every structure is a plain card (probble.css .pb-card): its name, accession and length, its fold class as the
+// accent, its helix and sheet shares as chips; a click opens it in the renderer.
+const pct = v => Number.isFinite(v) ? Math.round(v * 100) + '%' : null;
 function card(r){
-  const a=document.createElement('a'); a.className='card';
-  a.style.borderLeftColor = cssv((CLS.find(c=>c.key===r.cls)||CLS[3]).varc);
-  a.href = 'explore.html?acc='+encodeURIComponent(r.acc)+'&name='+encodeURIComponent(r.name);
-  a.innerHTML = '<div class="nm">'+r.name+'</div><div class="meta"><b>'+r.acc+'</b><span>'+r.len+' aa</span></div>';
-  return a;
+  const c = CLS.find(k => k.key === r.cls) || CLS[3];
+  const href = TARGET + '?acc=' + encodeURIComponent(r.acc) + '&name=' + encodeURIComponent(r.name);
+  const chips = [c.label, pct(r.ph) && pct(r.ph) + ' helix', pct(r.ps) && pct(r.ps) + ' sheet'].filter(Boolean);
+  return '<a class="pb-card" style="--accent:var(' + c.varc + ')" href="' + esc(href) + '" title="' + esc(r.name) + '"><b>' + esc(r.name) + '</b>'
+    + '<span class="ctx">UniProt ' + esc(r.acc) + ' · ' + esc(r.len) + ' residues</span>'
+    + '<span class="chips">' + chips.map(x => '<span>' + esc(x) + '</span>').join('') + '</span></a>';
 }
 function render(filter){
-  const main=document.getElementById('main'); main.innerHTML='';
-  const f=(filter||'').trim().toLowerCase();
-  let shown=0;
-  for(const c of CLS){
-    const rows=ROWS.filter(r=>r.cls===c.key && (!f || r.name.toLowerCase().includes(f) || r.acc.toLowerCase().includes(f)));
-    if(!rows.length) continue;
-    shown+=rows.length;
-    const g=document.createElement('div'); g.className='grp';
-    g.innerHTML='<h2><span class="dot" style="background:'+cssv(c.varc)+'"></span>'+c.label+' <span class="ct">'+rows.length+'</span></h2>';
-    const grid=document.createElement('div'); grid.className='grid';
-    rows.forEach(r=>grid.appendChild(card(r)));
+  const main = document.getElementById('main'); main.innerHTML = '';
+  const f = (filter || '').trim().toLowerCase();
+  let shown = 0;
+  for (const c of CLS) {
+    if (ONLY && c.key !== ONLY) continue;
+    const rows = ROWS.filter(r => r.cls === c.key && (!f || r.name.toLowerCase().includes(f) || r.acc.toLowerCase().includes(f)));
+    if (!rows.length) continue;
+    shown += rows.length;
+    const g = document.createElement('div'); g.className = 'fv-grp';
+    g.innerHTML = '<h2><span class="fv-tag" style="--tag:var(' + c.varc + ')"></span>' + c.label + ' <span class="ct">' + rows.length + '</span></h2>';
+    const grid = document.createElement('div'); grid.className = 'lg-tiles';
+    grid.innerHTML = rows.map(card).join('');
     g.appendChild(grid); main.appendChild(g);
   }
   // accession-lookup affordance: no name matches but the query looks like an accession
-  const emp=document.getElementById('empty');
-  if(!shown && ACC_RE.test(f)){ emp.style.display='block'; document.getElementById('qval').textContent=f.toUpperCase(); }
-  else emp.style.display='none';
+  const emp = document.getElementById('empty');
+  if (!shown && ACC_RE.test(f)) { emp.style.display = 'block'; document.getElementById('qval').textContent = f.toUpperCase(); }
+  else emp.style.display = 'none';
 }
 
-const q=document.getElementById('q');
-q.addEventListener('input',()=>render(q.value));
-q.addEventListener('keydown',e=>{
-  if(e.key==='Enter'){ const v=q.value.trim().toUpperCase();
-    if(ACC_RE.test(v)){ location.href='explore.html?acc='+encodeURIComponent(v); } }
+const q = document.getElementById('q');
+q.addEventListener('input', () => render(q.value));
+q.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = q.value.trim().toUpperCase();
+    if (ACC_RE.test(v)) location.href = TARGET + '?acc=' + encodeURIComponent(v); }
 });
 
-fetch('catalog.json').then(r=>r.json()).then(rows=>{
-  ROWS=rows;
-  const by={}; CLS.forEach(c=>by[c.key]=0); rows.forEach(r=>by[r.cls]=(by[r.cls]||0)+1);
-  document.getElementById('sub').textContent =
-    rows.length+' human proteins · organized by fold class · '+
-    CLS.map(c=>by[c.key]+' '+c.label).join('  ·  ');
+// The library, with the fold classes as the sidebar's tags.
+const win = document.getElementById('win-fv');
+document.getElementById('fv-tags').innerHTML = CLS.map(c => '<button class="lg-side-item fv-tag" data-cls="' + c.key
+  + '" style="--tag:var(' + c.varc + ')">' + c.label + '<span class="fv-count" data-ct="' + c.key + '"></span></button>').join('');
+win.querySelector('.lg-sidebar').addEventListener('click', e => {
+  const b = e.target.closest('[data-cls]');
+  if (!b) return;
+  win.querySelectorAll('[data-cls]').forEach(x => x.classList.toggle('is-selected', x === b));
+  ONLY = b.dataset.cls;
+  render(q.value);
+});
+
+
+fetch('catalog.json').then(r => r.json()).then(rows => {
+  ROWS = rows;
+  const by = {}; CLS.forEach(c => by[c.key] = 0); rows.forEach(r => by[r.cls] = (by[r.cls] || 0) + 1);
+  document.getElementById('ct-all').textContent = rows.length;
+  CLS.forEach(c => { win.querySelector('[data-ct="' + c.key + '"]').textContent = by[c.key]; });
   render('');
 });
 </script>

@@ -1,2 +1,6 @@
 3Dmol-dev.js
+3Dmol-anim.js
 __pycache__/
+wobble/
+.venv-wobble/
+wobble-batch.log

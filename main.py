@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FoldView — AlphaFold structure library + protein renderer.
+Probble (Protein + Wobble) — AlphaFold structure library + protein renderer.
 
 Landing (catalog.html) is the browse-by-fold-class library; every card opens explore.html,
 the four-tab renderer (Explore / Assemble / Fold / Atoms). It runs on a locally-built
