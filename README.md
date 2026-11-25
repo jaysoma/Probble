@@ -4,7 +4,7 @@
 
 **Live demo: https://jaysoma.dev/probble/** (the full AlphaFold structure library, browsable by fold class)
 
-<!-- hero GIF: the probble render -->
+![The probble render: confident regions solid, low-confidence loops dissolving into haze, with the frame profiler on the right](media/probble.gif)
 
 AlphaFold gives every residue a confidence score (pLDDT) and stores it in the B-factor column of every model. The usual way to show it is a color ramp, which hides the structure under a rainbow. Probble makes confidence part of the geometry: confident atoms are solid, uncertain ones turn translucent, and the regions AlphaFold is guessing at dissolve into haze.
 
@@ -22,6 +22,8 @@ python main.py        # serves this folder on http://127.0.0.1:8005
 ```
 
 It's a static app: `main.py` is only a file server. Structures load from the local library when present, and from the AlphaFold Database API otherwise.
+
+The Wobble view also needs each structure's collective modes, which stay out of git: `python wobble.py <UniProt accession>` writes `wobble/<accession>.bin` (needs NumPy and ProDy).
 
 ## Credits
 
