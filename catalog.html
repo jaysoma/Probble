@@ -32,7 +32,7 @@
       </div>
       <div class="lg-side-head">Library</div>
       <button class="lg-side-item is-selected" data-cls=""><svg viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>All Structures<span class="fv-count" id="ct-all"></span></button>
-      <button class="lg-side-item fv-tag" data-cls="ens" style="--tag:#e9b85a">Ensembles<span class="fv-count" id="ct-ens"></span></button>
+      <button class="lg-side-item fv-tag" data-cls="ens" style="--tag:#e9b85a" id="side-ens" hidden>Ensembles<span class="fv-count" id="ct-ens"></span></button>
       <div class="lg-side-head">Fold classes</div>
       <div id="fv-tags"></div>
     </aside>
@@ -68,6 +68,7 @@ const CLS = [
 ];
 // ENSEMBLES: experimental entries with many models of one protein. Their cards open the renderer with
 // ?pdb=, which draws confidence from how far each residue moves across the models, not from pLDDT.
+let SHOW_ENS = false;               // the Ensembles shelf is Jay's only, like the renderer's Ensemble tab
 const ENSEMBLES = [
   {pdb:'1D3Z', name:'Ubiquitin', note:'10 NMR models', len:76},
   {pdb:'2K39', name:'Ubiquitin, dynamic ensemble', note:'116 NMR models', len:76},
@@ -96,7 +97,7 @@ function card(r){
     + '<span class="chips">' + chips.map(x => '<span>' + esc(x) + '</span>').join('') + '</span></a>';
 }
 function ensCard(e){
-  const href = TARGET + '?pdb=' + encodeURIComponent(e.pdb) + '&name=' + encodeURIComponent(e.name) + '&tab=wobble';
+  const href = TARGET + '?pdb=' + encodeURIComponent(e.pdb) + '&name=' + encodeURIComponent(e.name) + '&tab=ens';
   return '<a class="pb-card" style="--accent:#e9b85a" href="' + esc(href) + '" title="' + esc(e.name) + '"><b>' + esc(e.name) + '</b>'
     + '<span class="ctx">PDB ' + esc(e.pdb) + ' · ' + esc(e.len) + ' residues</span>'
     + '<span class="chips"><span>' + esc(e.note) + '</span><span>spread</span></span></a>';
@@ -105,7 +106,7 @@ function render(filter){
   const main = document.getElementById('main'); main.innerHTML = '';
   const f = (filter || '').trim().toLowerCase();
   let shown = 0;
-  if (!ONLY || ONLY === 'ens') {
+  if (SHOW_ENS && (!ONLY || ONLY === 'ens')) {
     const es = ENSEMBLES.filter(e => !f || e.name.toLowerCase().includes(f) || e.pdb.toLowerCase().includes(f));
     if (es.length) {
       shown += es.length;
@@ -156,10 +157,16 @@ win.querySelector('.lg-sidebar').addEventListener('click', e => {
 fetch('catalog.json').then(r => r.json()).then(rows => {
   ROWS = rows;
   const by = {}; CLS.forEach(c => by[c.key] = 0); rows.forEach(r => by[r.cls] = (by[r.cls] || 0) + 1);
-  document.getElementById('ct-all').textContent = rows.length + ENSEMBLES.length;
+  document.getElementById('ct-all').textContent = rows.length;
   document.getElementById('ct-ens').textContent = ENSEMBLES.length;
   CLS.forEach(c => { win.querySelector('[data-ct="' + c.key + '"]').textContent = by[c.key]; });
   render('');
+  fetch('/mode', {cache: 'no-store'}).then(r => r.ok ? r.json() : {}).then(m => {
+    if (m.mode !== 'jay') return;
+    SHOW_ENS = true; document.getElementById('side-ens').hidden = false;
+    document.getElementById('ct-all').textContent = rows.length + ENSEMBLES.length;
+    render(q.value);
+  }).catch(() => {});
 });
 </script>
 </body>

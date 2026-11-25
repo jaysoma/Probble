@@ -57,11 +57,11 @@
   /* the sidebar: the story of the view you're in */
   #left { flex: none; display: flex; flex-direction: column; width: 340px; min-height: 0; }
   .fv-side-top { flex: none; }
-  #explore, #fold, #atoms, #wobble { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 18px 18px 14px; user-select: text; }
-  #explore h1, #fold h1, #atoms h1, #wobble h1 { margin: 6px 0 10px; font-size: 18px; font-weight: 700; color: var(--lg-text); }
-  #explore p, #fold p, #atoms p, #wobble p { margin: 0 0 11px; font-size: 13px; line-height: 1.6; color: var(--lg-text-2); }
-  #explore p b, #fold p b, #atoms p b, #wobble p b { color: var(--lg-text); }
-  #explore .tag, #fold .tag, #atoms .tag, #wobble .tag { display: inline-block; padding: 3px 9px; border-radius: 999px;
+  #explore, #fold, #atoms, #wobble, #ens { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 18px 18px 14px; user-select: text; }
+  #explore h1, #fold h1, #atoms h1, #wobble h1, #ens h1 { margin: 6px 0 10px; font-size: 18px; font-weight: 700; color: var(--lg-text); }
+  #explore p, #fold p, #atoms p, #wobble p, #ens p { margin: 0 0 11px; font-size: 13px; line-height: 1.6; color: var(--lg-text-2); }
+  #explore p b, #fold p b, #atoms p b, #wobble p b, #ens p b { color: var(--lg-text); }
+  #explore .tag, #fold .tag, #atoms .tag, #wobble .tag, #ens .tag { display: inline-block; padding: 3px 9px; border-radius: 999px;
     background: var(--lg-control); box-shadow: inset 0 0 0 .5px rgba(128, 128, 128, .3); font-size: 11px; color: var(--lg-text-2); }
 
   /* the toolbar: back to the library, the protein, the five views */
@@ -156,6 +156,14 @@
     <p>The idealized unfolded chain collapsing into its native structure — the “possible initial” folding into the verified fold, every atom travelling to its place at once.</p>
     <span class="tag">illustration · coil → native</span>
   </div>
+  <div id="ens">
+    <h1>Ensemble</h1>
+    <p>Not a prediction — <b id="ensK">several</b> measured models of the same protein. Each residue is drawn by how far it
+    actually moves between them: steady residues are solid spheres, wandering ones widen into faint probability balls.</p>
+    <p>The structure glides from each model to the next, so you watch the real conformations morph into one another. The
+    steady core holds still; the loose parts swing through the space they really occupy.</p>
+    <span class="tag">probble™ · measured spread · private tab</span>
+  </div>
   <div id="wobble">
     <h1>Wobble</h1>
     <p>Not motion — <b>the distribution</b>. Where AlphaFold is confident, an atom is a sphere.
@@ -186,6 +194,7 @@
       <button id="tabExplore" class="on">Protein</button>
       <button id="tabFold">Fold</button>
       <button id="tabWobble">Wobble</button>
+      <button id="tabEns" hidden title="Only you see this tab">Ensemble</button>
       <button id="tabAtoms">Atoms</button>
     </div>
   </div>
@@ -536,7 +545,7 @@ function setEnsembleCoords(t){
   for(let i=0;i<M;i++){ const a=atoms[i], b=i*3; a.x=A[b]+(B[b]-A[b])*f; a.y=A[b+1]+(B[b+1]-A[b+1])*f; a.z=A[b+2]+(B[b+2]-A[b+2])*f; }
 }
 async function wobbleStep(t, md){
-  if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz){
+  if(curTab==='ens' && ENSEMBLE && ENSEMBLE.xyz){
     setEnsembleCoords(t); model.syncAtomPositions(); viewer.render();
   } else if(TRAJ>1){
     trajF=(trajF+1)%TRAJ;
@@ -553,15 +562,16 @@ function runWobble(rephase){
   if(!viewer||!M) return;
   const tok=++wobbleTok;
   const start=async md=>{
-    if(tok!==wobbleTok || curTab!=='wobble') return;
-    if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz) setEnsembleCoords(0);
+    if(tok!==wobbleTok || (curTab!=='wobble' && curTab!=='ens')) return;
+    motionWas=curTab;
+    if(curTab==='ens' && ENSEMBLE && ENSEMBLE.xyz) setEnsembleCoords(0);
     else if(TRAJ>1){ trajF=0; await model.setFrame(0); }
     else { if(rephase||!md.phase) md.phase=Array.from({length:md.k},()=>Math.random()*2*Math.PI); setWobbleCoords(0,null); }
     cloudKBuilt=cloudK; styleSpheres(true, true);   // the ONE build: balls for the uncertain, bonds included
     viewer.zoomTo(); viewer.render();
-    if((TRAJ<=1 || (ENSEMBLE && ENSEMBLE.xyz)) && model.syncAtomPositions()===false){ window.__err('syncAtomPositions() refused — geometry not fully trackable; wobble will not animate'); return; }
+    if((TRAJ<=1 || (curTab==='ens' && ENSEMBLE && ENSEMBLE.xyz)) && model.syncAtomPositions()===false){ window.__err('syncAtomPositions() refused — geometry not fully trackable; wobble will not animate'); return; }
     let t=0, last=performance.now();
-    const frame=async()=>{ if(tok!==wobbleTok || curTab!=='wobble') return;
+    const frame=async()=>{ if(tok!==wobbleTok || (curTab!=='wobble' && curTab!=='ens')) return;
       const now=performance.now(); t+=((now-last)/1000)*animSpeed; last=now;   // slider changes tempo, not phase
       if(wobbleRebuild){ wobbleRebuild=false; cloudKBuilt=cloudK; styleSpheres(true, true); }   // slider released
       await wobbleStep(t, md);
@@ -569,10 +579,10 @@ function runWobble(rephase){
     };
     frame();
   };
-  (TRAJ>1 ? Promise.resolve(null) : loadWobble()).then(start).catch(e=>window.__err(String(e.message||e)));
+  ((TRAJ>1 || curTab==='ens') ? Promise.resolve(null) : loadWobble()).then(start).catch(e=>window.__err(String(e.message||e)));
 }
 function restoreWobbleNative(){
-  if(TRAJ>1 && ENSEMBLE && ENSEMBLE.xyz){ setEnsembleCoords(0); if(model.syncAtomPositions) model.syncAtomPositions(); return; }
+  if(motionWas==='ens' && ENSEMBLE && ENSEMBLE.xyz){ setEnsembleCoords(0); if(model.syncAtomPositions) model.syncAtomPositions(); return; }
   if(TRAJ>1){ model.setFrame(0); return; }            // back to frame 0; the next render rebuilds
   if(!wobbleX0||!M) return;
   setWobbleCoords(0,null);
@@ -637,7 +647,7 @@ function updateLegend(){ const el=document.getElementById('legend'); let items=n
   else if(mode==='segdom'){ const ks=[...new Set(Object.values(res2dom_gen))].sort(); items=ks.map(d=>['domain '+(d+1),DOMG[d%DOMG.length]]); }
   // Protein, Fold & Wobble carry confidence as translucency — the legend says so. The Atoms
   // cloud is opaque (its shading is depth, not confidence), so the bands would be a lie there.
-  if(curTab!=='atoms') items=(items||[]).concat(ENSEMBLE ? SPREAD_BANDS : CONF_BANDS);
+  if(curTab!=='atoms') items=(items||[]).concat(curTab==='ens' ? SPREAD_BANDS : CONF_BANDS);
   if(!items){ el.style.display='none'; return; }
   el.innerHTML=items.map(([l,c])=>'<div class="row"><span class="sw" style="background:'+hex(c)+'"></span>'+l+'</div>').join('');
   el.style.display='block';
@@ -647,9 +657,12 @@ const tabExplore=document.getElementById('tabExplore'),
       tabFold=document.getElementById('tabFold'), tabAtoms=document.getElementById('tabAtoms'),
       tabWobble=document.getElementById('tabWobble');
 function showTab(which){
-  const explore=which==='explore', fold=which==='fold', atomsTab=which==='atoms', wobble=which==='wobble';
+  const explore=which==='explore', fold=which==='fold', atomsTab=which==='atoms', wobble=which==='wobble', ens=which==='ens';
+  if(ENSEMBLE && PLDDT0){ res2plddt = ens ? ENSEMBLE.conf : PLDDT0; }   // which confidence the styles read
   tabExplore.classList.toggle('on',explore);
   tabFold.classList.toggle('on',fold); tabAtoms.classList.toggle('on',atomsTab); tabWobble.classList.toggle('on',wobble);
+  document.getElementById('tabEns').classList.toggle('on',ens);
+  document.getElementById('ens').style.display=ens?'block':'none';
   document.getElementById('explore').style.display=explore?'block':'none';
   document.getElementById('fold').style.display=fold?'block':'none';
   document.getElementById('atoms').style.display=atomsTab?'block':'none';
@@ -658,14 +671,14 @@ function showTab(which){
   document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
 
   const leavingFold = curTab==='fold' && !fold;
-  const leavingWobble = curTab==='wobble' && !wobble;
+  const leavingWobble = (curTab==='wobble' && !wobble) || (curTab==='ens' && !ens);
   curTab=which;
   growTok++; foldTok++; wobbleTok++;   // cancel whatever animation was running
   if(leavingFold) restoreNative();
   if(leavingWobble) restoreWobbleNative();
 
   if(fold){ runFold(); }
-  else if(wobble){ runWobble(false); }
+  else if(wobble || ens){ runWobble(false); }
   else if(atomsTab){ viewer.zoomTo(); styleAtomCloud(); }
   else { viewer.zoomTo(); runSphereReveal(); }
   updateLegend();
@@ -673,12 +686,13 @@ function showTab(which){
 tabExplore.onclick=()=>showTab('explore');
 tabFold.onclick=()=>showTab('fold'); tabAtoms.onclick=()=>showTab('atoms');
 tabWobble.onclick=()=>showTab('wobble');
+document.getElementById('tabEns').onclick=()=>showTab('ens');
 
 // One replay for whichever view is showing, instead of a button per panel.
 function replayCurrent(){
   if(!viewer||!M) return;
   if(curTab==='fold') runFold();
-  else if(curTab==='wobble') runWobble(true);   // re-roll the phases
+  else if(curTab==='wobble' || curTab==='ens') runWobble(true);   // re-roll the phases
   else if(curTab==='atoms') styleAtomCloud();   // static view: just restyle
   else runSphereReveal();
 }
@@ -724,7 +738,7 @@ async function loadPDB(){
 // That spread drives everything pLDDT drives -- opacity bands, probability balls, the legend --
 // through one mapping: 0.5 A or less reads as pLDDT 100 and each further angstrom costs 20, so the
 // bands fall at 1, 2 and 3 A (pLDDT 90, 70, 50) and anything over 3 A is ghost.
-let ENSEMBLE=null;                 // {models, spread: {resi: angstrom}} when the file is an ensemble
+let ENSEMBLE=null, PLDDT0=null, motionWas=null;   // motionWas: which tab last drove the motion ('wobble' | 'ens')                 // {models, spread: {resi: angstrom}} when the file is an ensemble
 const spreadToConf=r=>Math.max(0, Math.min(100, 100-20*(r-0.5)));
 function caByModel(pdb){
   const models=[]; let cur=null;
@@ -857,18 +871,10 @@ loadPDB().then(pdb=>{
   // treat every residue as confident rather than drawing the whole thing as ghost.
   if(atoms.every(a=>!a.b)) for(const r in res2plddt) res2plddt[r]=100;
   if(nModels>1){ ENSEMBLE=ensembleSpread(pdb);
-    if(ENSEMBLE){ for(const r in res2plddt) if(r in ENSEMBLE.spread) res2plddt[r]=spreadToConf(ENSEMBLE.spread[r]);
+    if(ENSEMBLE){ ENSEMBLE.conf={...res2plddt}; for(const r in res2plddt) if(r in ENSEMBLE.spread) ENSEMBLE.conf[r]=spreadToConf(ENSEMBLE.spread[r]);
       ENSEMBLE.xyz=ensembleCoords(pdb, ENSEMBLE.fits, atoms);
       if(!ENSEMBLE.xyz) window.__err('ensemble: a drawn atom is missing from one of the models; the Ensemble tab will step between models instead of gliding'); } }
-  if(ENSEMBLE){                     // the Wobble story for real models, not the computed sway
-    const w=document.getElementById('wobble'), K=ENSEMBLE.models;
-    w.querySelector('h1').textContent='Ensemble';
-    const ps=w.querySelectorAll('p');
-    ps[0].innerHTML='Not a prediction — <b>'+K+' measured models</b> of the same protein. Each residue is drawn by how far it actually moves between them: steady residues are solid spheres, wandering ones widen into faint probability balls.';
-    if(ps[1]) ps[1].innerHTML='The structure glides from each model to the next, so you watch the real conformations morph into one another. The confident core holds still; the loose parts swing through the space they really occupy.';
-    w.querySelector('.tag').textContent='probble™ · measured spread · '+K+' models';
-    document.getElementById('tabWobble').textContent='Ensemble';
-  }
+  PLDDT0={...res2plddt};             // the file's own confidence, restored whenever the Ensemble tab is left
   // frequency order, so the legend reads carbon → nitrogen → oxygen → sulfur for a protein
   elemsPresent=[...elemCount.entries()].sort((p,q)=>q[1]-p[1]).map(e=>e[0]);
   if(!caOrder.length){ window.__err('no Cα atoms parsed'); return; }
@@ -886,7 +892,13 @@ loadPDB().then(pdb=>{
 
   updateLegend();
   const tb=P.get('tab');
-  showTab((tb==='fold'||tb==='atoms'||tb==='wobble') ? tb : 'explore');
+  // THE ENSEMBLE TAB IS JAY'S (2026-11-24: "the tab only be visible if the user is me"): the gateway's /mode
+  // answers "jay" on his own devices; anyone else, or the page served without the gateway, never sees it.
+  const isJay = ENSEMBLE ? fetch('/mode', {cache:'no-store'}).then(r=>r.ok?r.json():{}).then(m=>m.mode==='jay').catch(()=>false) : Promise.resolve(false);
+  isJay.then(jay=>{
+    if(jay){ document.getElementById('tabEns').hidden=false; document.getElementById('ensK').textContent=ENSEMBLE.models; }
+    showTab((tb==='ens' && jay) ? 'ens' : (tb==='fold'||tb==='atoms'||tb==='wobble') ? tb : 'explore');
+  });
 
 }).catch(e=>window.__err('load failed: '+e));
 </script>
