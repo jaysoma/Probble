@@ -39,10 +39,7 @@
               sways along its collective modes (wobble.py -> wobble/<ACC>.bin, an elastic
               network on the pLDDT>=70 core), moved in place by syncAtomPositions(). A
               confidence-radius slider scales the balls: in place while dragging
-              (syncSphereRadii), rebuilt on release so opacity follows. A PATH toggle chooses
-              how each frame reaches the screen -- replay in place, or rebuild everything as
-              trajectory playback does today -- and a dashboard under the legend samples frame
-              time, bytes allocated, main-thread busy share and rate. A multi-model file (e.g.
+              (syncSphereRadii), rebuilt on release so opacity follows. A multi-model file (e.g.
               structures/TEMP_1_2_28.pdb, 3Dmol's 29-frame test trajectory) plays its own
               frames through setFrame() on this tab instead of the ANM sway.
 
@@ -91,7 +88,7 @@
 
   /* the controls: glass chips over the scene */
   #ctrls { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
-  #ctrls select, #ctrls .box, #ctrls > button, #legend, #dash { border: 0; border-radius: 10px; background: rgba(28, 30, 36, .62);
+  #ctrls select, #ctrls .box, #ctrls > button, #legend { border: 0; border-radius: 10px; background: rgba(28, 30, 36, .62);
     box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22), 0 4px 14px rgba(0, 0, 0, .25); color: #e6ebf2; font: 12px var(--lg-font); }
   #ctrls select { padding: 6px 28px 6px 12px; cursor: default; -webkit-appearance: none; appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23c9d3df' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
@@ -105,12 +102,6 @@
   #legend { display: none; max-width: 230px; padding: 9px 12px; font-size: 11px; color: #aab6c4; }
   #legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
   #legend .sw { flex: none; width: 11px; height: 11px; border-radius: 3px; }
-  #dash { display: none; width: 230px; padding: 9px 12px 6px; font-size: 11px; color: #aab6c4; }
-  #dash .row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin: 2px 0; }
-  #dash .row b { margin-left: auto; font-size: 13px; color: var(--amber); font-variant-numeric: tabular-nums; }
-  #dash .row .u { min-width: 22px; color: #6f8296; }
-  #dash .k { font-size: 10px; letter-spacing: .6px; text-transform: uppercase; color: #6f8296; }
-  #dash canvas { display: block; width: 206px; height: 24px; margin: 1px 0 7px; }
 
   /* THE WATCH-FOLDER LOOK, IN THE LIGHT APPEARANCE (Jay, 2026-10-23: the smoked stage stayed near-black "even at full
      opacity", and the coil and the ghosted atoms lost their contrast on it; iPadOS's Watch folder "would be a nicer
@@ -133,14 +124,13 @@
   .fv-stage { background: var(--fv-stage, rgba(8, 11, 16, .84)); box-shadow: inset 0 0 0 .5px var(--fv-stage-rim, rgba(255, 255, 255, .12)); }
   #seqbar { background: var(--fv-bar, rgba(8, 11, 16, .78)); color: var(--fv-ink-2, #8aa0b8); border-top-color: var(--fv-chip-rim, rgba(255, 255, 255, .12)); }
   /* THE CHIPS OVER THE SCENE WEAR THE SIDEBAR'S GLASS (Jay, 2026-10-24: every tile the left panel's frost, glass.css) */
-  #ctrls select, #ctrls .box, #ctrls > button, #legend, #dash { background-color: var(--lg-frost); color: var(--fv-ink, #e6ebf2);
+  #ctrls select, #ctrls .box, #ctrls > button, #legend { background-color: var(--lg-frost); color: var(--fv-ink, #e6ebf2);
     box-shadow: var(--lg-frost-rims); }
   #ctrls select { background-image: var(--fv-arrow, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23c9d3df' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E")); }
   #ctrls > button:hover, #ctrls select:hover { background-color: var(--lg-frost-hover); }
   #ctrls select option { background: var(--fv-option, #1c1e24); color: var(--fv-ink, #e6ebf2); }
-  #ctrls .box, #legend, #dash { color: var(--fv-ink-2, #aab6c4); }
-  #ctrls #spdVal, #ctrls #confRVal, #dash .row b { color: var(--fv-amber, var(--amber)); }
-  #dash .row .u, #dash .k { color: var(--fv-ink-3, #6f8296); }
+  #ctrls .box, #legend { color: var(--fv-ink-2, #aab6c4); }
+  #ctrls #spdVal, #ctrls #confRVal { color: var(--fv-amber, var(--amber)); }
 </style>
 </head>
 <body class="lg-desktop">
@@ -230,16 +220,6 @@
   <button id="replay" title="Re-run the current view's animation">↻ replay</button>
   
   <div id="legend"></div>
-  <div id="dash">
-    <div class="row"><span class="k">frame</span><b id="dFrame">0</b><span class="u"></span></div>
-    <div class="row"><span class="k">frame time</span><b id="dMs">—</b><span class="u">ms</span></div>
-    <canvas id="cMs" width="412" height="48"></canvas>
-    <div class="row"><span class="k">allocated / frame</span><b id="dAlloc">—</b><span class="u">MB</span></div>
-    <canvas id="cAlloc" width="412" height="48"></canvas>
-    <div class="row"><span class="k">main thread busy</span><b id="dBusy">—</b><span class="u">%</span></div>
-    <canvas id="cBusy" width="412" height="48"></canvas>
-    <div class="row"><span class="k">rate</span><b id="dFps">—</b><span class="u">fps</span></div>
-  </div>
 </div>
   </div>
 </div>
@@ -249,17 +229,6 @@
 <!-- 3Dmol.js 3.0.0, the release that shipped per-atom opacity (#858) and the in-place coordinate path (#859). Earlier
      builds lack syncSpherePositions() and the
      Fold tab would silently fall back to a full rebuild every frame. -->
-<script>
-// Typed-array allocation counter for the Wobble dashboard. 3Dmol looks these constructors up
-// on the global at call time, so subclassing them counts every array it creates while
-// `counting` is on. Views and subarrays are not allocations and go through untouched.
-window.__alloc={bytes:0,counting:false};
-for(const name of ['Float32Array','Float64Array','Uint16Array','Uint32Array','Int32Array','Uint8Array','ArrayBuffer']){
-  const Orig=window[name];
-  const W=function(...args){ const inst=Reflect.construct(Orig,args,new.target||W); if(window.__alloc.counting) window.__alloc.bytes+=inst.byteLength; return inst; };
-  W.prototype=Orig.prototype; Object.setPrototypeOf(W,Orig); Object.defineProperty(W,'name',{value:name}); window[name]=W;
-}
-</script>
 <script src="https://cdn.jsdelivr.net/npm/3dmol@3.0.0/build/3Dmol-min.js"></script>
 <script>
 const $3Dmol = window.$3Dmol;
@@ -546,39 +515,9 @@ function restoreNative(){
 //            setFrame {fast:true}); nothing is rebuilt
 //   rebuild  every frame discards the geometry and regenerates it (a full restyle, or plain
 //            setFrame) -- what trajectory playback costs today
-// The dashboard under the legend samples every frame: wall time of update+draw, bytes of typed
-// arrays allocated (the counter at the head of the page), the share of the frame interval the
-// main thread spent busy, and the achieved rate. GC and CPU time are not readable from inside a
-// page and are deliberately not shown.
 let wobbleTok=0, wobbleModes=null, wobbleX0=null, wobbleRebuild=false, wobbleMode='replay', trajF=0;
 const WOBBLE_PEAK_A=1.0;                      // angstrom: peak sway of the softest mode
 const WOBBLE_PERIOD_S=4.0;                    // seconds per cycle of that mode at 1x
-
-// ── dashboard ──
-const DASH_N=60;                              // bars kept per sparkline
-const dash={frame:0, ms:[], alloc:[], busy:[], last:0};
-function spark(id, arr, fixedMax){
-  const c=document.getElementById(id), g=c.getContext('2d'), W=c.width, H=c.height, bw=W/DASH_N;
-  g.clearRect(0,0,W,H);
-  const m=Math.max(fixedMax||0, ...arr, 1e-9);
-  for(let i=0;i<arr.length;i++){ const h=Math.max(2,(arr[i]/m)*(H-2));
-    g.fillStyle = (i===arr.length-1) ? '#f0b54a' : '#3b5f8a'; g.fillRect(i*bw+1, H-h, bw-2, h); }
-}
-function dashPush(ms, bytes, interval){
-  const mb=bytes/1048576, busy=Math.min(100, 100*ms/Math.max(interval,1e-6));
-  dash.frame++; dash.ms.push(ms); dash.alloc.push(mb); dash.busy.push(busy);
-  for(const k of ['ms','alloc','busy']) if(dash[k].length>DASH_N) dash[k].shift();
-  document.getElementById('dFrame').textContent=dash.frame;
-  document.getElementById('dMs').textContent=ms.toFixed(1);
-  document.getElementById('dAlloc').textContent=mb.toFixed(2);
-  document.getElementById('dBusy').textContent=busy.toFixed(0);
-  document.getElementById('dFps').textContent=(1000/Math.max(interval,1e-6)).toFixed(0);
-  spark('cMs',dash.ms); spark('cAlloc',dash.alloc); spark('cBusy',dash.busy,100);
-}
-function dashReset(){ dash.frame=0; dash.ms=[]; dash.alloc=[]; dash.busy=[]; dash.last=0;
-  for(const id of ['dMs','dAlloc','dBusy','dFps']) document.getElementById(id).textContent='—';
-  document.getElementById('dFrame').textContent='0';
-  for(const id of ['cMs','cAlloc','cBusy']) spark(id,[]); }
 
 async function loadWobble(){
   if(wobbleModes) return wobbleModes;
@@ -618,11 +557,8 @@ function setWobbleCoords(t, md){
     for(let m=0;m<k;m++){ const q=(m*n+i)*3, w=s[m]; dx+=vec[q]*w; dy+=vec[q+1]*w; dz+=vec[q+2]*w; }
     a.x=wobbleX0[b]+dx; a.y=wobbleX0[b+1]+dy; a.z=wobbleX0[b+2]+dz; }
 }
-// One frame, measured: update + one draw, with the allocation counter on for exactly that span.
-// Both paths do exactly one draw, so their frame times compare like for like.
+// One frame: update + one draw.
 async function wobbleStep(t, md){
-  const t0=performance.now(), interval = dash.last ? (t0-dash.last) : 0; dash.last=t0;
-  window.__alloc.bytes=0; window.__alloc.counting=true;
   if(TRAJ>1){
     trajF=(trajF+1)%TRAJ;
     await model.setFrame(trajF, {fast: wobbleMode==='replay'});   // rebuild: plain setFrame discards the geometry
@@ -632,8 +568,6 @@ async function wobbleStep(t, md){
     if(wobbleMode==='replay'){ model.syncAtomPositions(); viewer.render(); }
     else { cloudKBuilt=cloudK; styleSpheres(true, true); }         // full regeneration; styleSpheres draws once
   }
-  window.__alloc.counting=false;
-  dashPush(performance.now()-t0, window.__alloc.bytes, interval || (performance.now()-t0));
 }
 // Runs until the tab changes. `rephase` (replay) re-rolls the sway phases so the blend differs.
 function runWobble(rephase){
@@ -641,7 +575,6 @@ function runWobble(rephase){
   const tok=++wobbleTok;
   const start=async md=>{
     if(tok!==wobbleTok || curTab!=='wobble') return;
-    dashReset();
     if(TRAJ>1){ trajF=0; await model.setFrame(0); }
     else { if(rephase||!md.phase) md.phase=Array.from({length:md.k},()=>Math.random()*2*Math.PI); setWobbleCoords(0,null); }
     cloudKBuilt=cloudK; styleSpheres(true, true);   // the ONE build: balls for the uncertain, bonds included
@@ -742,7 +675,6 @@ function showTab(which){
   document.getElementById('wobble').style.display=wobble?'block':'none';
   document.getElementById('ctrls').style.display='flex';
   document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
-  document.getElementById('dash').style.display=wobble?'block':'none';
   document.getElementById('seqbar').style.display=asm?'block':'none';
 
   const leavingFold = curTab==='fold' && !fold;
@@ -786,9 +718,7 @@ confR.oninput=()=>{ cloudK=parseFloat(confR.value); confRVal.textContent=cloudK.
 confR.onchange=()=>{ if(curTab==='wobble') wobbleRebuild=true; };
 confR.oninput();
 
-// The Wobble tab always takes the fast path (replay in place). The picker that could switch it to
-// rebuild-every-frame was a diagnostic for 3Dmol.js PR #859 and was removed 2026-11-24; foldbench.html
-// still compares the two paths.
+// The Wobble tab always takes the fast path (replay in place).
 
 const cmodeSel=document.getElementById('cmode');
 cmodeSel.onchange=()=>{ colorMode=cmodeSel.value; replayCurrent(); updateLegend(); };

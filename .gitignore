@@ -4,3 +4,5 @@ __pycache__/
 wobble/
 .venv-wobble/
 wobble-batch.log
+foldbench.html
+bench/
