@@ -239,7 +239,7 @@ const elemColor=el=>ELEMC[el]??ELEMC._;
 // representation and by both animated tabs.
 function confA(b){ return b>=90?1.0 : b>=70?0.75 : b>=50?0.4 : 0.2; }
 
-const P=new URLSearchParams(location.search), ACC=(P.get('acc')||'').toUpperCase(), NAME=P.get('name');
+const P=new URLSearchParams(location.search), PDB_ID=(P.get('pdb')||'').toUpperCase(), ACC=PDB_ID||(P.get('acc')||'').toUpperCase(), NAME=P.get('name');
 const REF = !ACC || ACC==='O05011';
 
 // ═══════════════════ per-residue maps + colouring ═══════════════════
@@ -615,15 +615,16 @@ function styleAtomCloud(){
 }
 
 // ═══════════════════ tabs + legend ═══════════════════
+const SPREAD_BANDS=[['solid · moves ≤1 Å',0x9aa3ad],['0.75 · ≤2 Å',0x7c8896],['0.40 · ≤3 Å',0x5a6470],['ghost · >3 Å',0x39414c]];
 const CONF_BANDS=[['solid · pLDDT ≥90',0x9aa3ad],['0.75 · ≥70',0x7c8896],['0.40 · ≥50',0x5a6470],['ghost · <50',0x39414c]];
 function updateLegend(){ const el=document.getElementById('legend'); let items=null;
   const mode=activeMode();
   if(mode==='ss') items=[['α-helix',SS_H],['β-strand',SS_E],['coil',SS_C]];
   else if(mode==='element') items=elemsPresent.map(el=>[(ELEM_NAME[el]||el)+' ('+el+')', elemColor(el)]);
   else if(mode==='segdom'){ const ks=[...new Set(Object.values(res2dom_gen))].sort(); items=ks.map(d=>['domain '+(d+1),DOMG[d%DOMG.length]]); }
-  // Protein, Assemble & Fold carry confidence as translucency — the legend says so. The Atoms
+  // Protein, Fold & Wobble carry confidence as translucency — the legend says so. The Atoms
   // cloud is opaque (its shading is depth, not confidence), so the bands would be a lie there.
-  if(curTab!=='atoms') items=(items||[]).concat(CONF_BANDS);
+  if(curTab!=='atoms') items=(items||[]).concat(ENSEMBLE ? SPREAD_BANDS : CONF_BANDS);
   if(!items){ el.style.display='none'; return; }
   el.innerHTML=items.map(([l,c])=>'<div class="row"><span class="sw" style="background:'+hex(c)+'"></span>'+l+'</div>').join('');
   el.style.display='block';
@@ -692,14 +693,84 @@ const SHORT_NAME=(NAME||'').split(' (')[0];
 document.getElementById('pttl').textContent = SHORT_NAME || (REF?'NqrB · subunit B':ACC);
 if(NAME) document.getElementById('pttl').title = NAME;
 document.getElementById('pacc').textContent = ACC || 'O05011';
+if(PDB_ID) document.getElementById('pacc').parentElement.firstChild.textContent = 'PDB ';
 
 // ═══════════════════ load + parse ═══════════════════
 async function loadPDB(){
   if(!ACC || ACC==='O05011') return (await fetch('O05011_af.pdb')).text();
   const local=await fetch('structures/'+ACC+'.pdb'); if(local.ok) return local.text();
+  if(PDB_ID) return (await fetch('https://files.rcsb.org/download/'+PDB_ID+'.pdb')).text();
   const meta=await (await fetch('https://alphafold.ebi.ac.uk/api/prediction/'+ACC)).json();
   return (await fetch(meta[0].pdbUrl)).text();
 }
+// ═══════════════════ ensemble: confidence from measured spread ═══════════════════
+// A file with several models of one protein (an NMR set, prediction seeds, generative samples) carries
+// its own uncertainty: how far each residue actually moves between the models. The models are
+// superposed on their C-alphas (Horn's quaternion method), then again on the steadier half, and each
+// residue's spread is the RMS distance of its C-alpha from its mean position (RMSF, in angstrom).
+// That spread drives everything pLDDT drives -- opacity bands, probability balls, the legend --
+// through one mapping: 0.5 A or less reads as pLDDT 100 and each further angstrom costs 20, so the
+// bands fall at 1, 2 and 3 A (pLDDT 90, 70, 50) and anything over 3 A is ghost.
+let ENSEMBLE=null;                 // {models, spread: {resi: angstrom}} when the file is an ensemble
+const spreadToConf=r=>Math.max(0, Math.min(100, 100-20*(r-0.5)));
+function caByModel(pdb){
+  const models=[]; let cur=null;
+  for(const line of pdb.split('\n')){
+    if(line.startsWith('MODEL')) cur=new Map();
+    else if(line.startsWith('ENDMDL')){ if(cur) models.push(cur); cur=null; }
+    else if(cur && line.startsWith('ATOM') && line.slice(12,16).trim()==='CA')
+      cur.set(parseInt(line.slice(22,26)), [parseFloat(line.slice(30,38)), parseFloat(line.slice(38,46)), parseFloat(line.slice(46,54))]);
+  }
+  return models;
+}
+// eigenvector of the largest eigenvalue of a symmetric 4x4 (cyclic Jacobi)
+function topEigen4(A){
+  const a=A.map(r=>r.slice()), v=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+  for(let sweep=0;sweep<50;sweep++){
+    let off=0; for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) off+=a[i][j]*a[i][j];
+    if(off<1e-18) break;
+    for(let p=0;p<4;p++) for(let q=p+1;q<4;q++){
+      if(Math.abs(a[p][q])<1e-15) continue;
+      const th=(a[q][q]-a[p][p])/(2*a[p][q]), t=(th>=0?1:-1)/(Math.abs(th)+Math.sqrt(th*th+1)), c=1/Math.sqrt(t*t+1), sn=t*c;
+      for(let k=0;k<4;k++){ const x=a[k][p], y=a[k][q]; a[k][p]=c*x-sn*y; a[k][q]=sn*x+c*y; }
+      for(let k=0;k<4;k++){ const x=a[p][k], y=a[q][k]; a[p][k]=c*x-sn*y; a[q][k]=sn*x+c*y; }
+      for(let k=0;k<4;k++){ const x=v[k][p], y=v[k][q]; v[k][p]=c*x-sn*y; v[k][q]=sn*x+c*y; }
+    }
+  }
+  let best=0; for(let i=1;i<4;i++) if(a[i][i]>a[best][best]) best=i;
+  return [v[0][best],v[1][best],v[2][best],v[3][best]];
+}
+// the rigid transform that best fits points P onto Q (same order), as a function applied to any point
+function fitTransform(P, Q){
+  const n=P.length, pc=[0,0,0], qc=[0,0,0];
+  for(let i=0;i<n;i++) for(let k=0;k<3;k++){ pc[k]+=P[i][k]/n; qc[k]+=Q[i][k]/n; }
+  const S=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<n;i++) for(let a=0;a<3;a++) for(let b=0;b<3;b++) S[a][b]+=(P[i][a]-pc[a])*(Q[i][b]-qc[b]);
+  const [xx,xy,xz]=S[0], [yx,yy,yz]=S[1], [zx,zy,zz]=S[2];
+  const [w,x,y,z]=topEigen4([[xx+yy+zz, yz-zy, zx-xz, xy-yx],[yz-zy, xx-yy-zz, xy+yx, zx+xz],
+                             [zx-xz, xy+yx, -xx+yy-zz, yz+zy],[xy-yx, zx+xz, yz+zy, -xx-yy+zz]]);
+  const R=[[w*w+x*x-y*y-z*z, 2*(x*y-w*z), 2*(x*z+w*y)],[2*(x*y+w*z), w*w-x*x+y*y-z*z, 2*(y*z-w*x)],
+           [2*(x*z-w*y), 2*(y*z+w*x), w*w-x*x-y*y+z*z]];
+  return p=>{ const d=[p[0]-pc[0],p[1]-pc[1],p[2]-pc[2]];
+    return [R[0][0]*d[0]+R[0][1]*d[1]+R[0][2]*d[2]+qc[0], R[1][0]*d[0]+R[1][1]*d[1]+R[1][2]*d[2]+qc[1],
+            R[2][0]*d[0]+R[2][1]*d[1]+R[2][2]*d[2]+qc[2]]; };
+}
+function ensembleSpread(pdb){
+  const models=caByModel(pdb); if(models.length<2) return null;
+  const resis=[...models[0].keys()].filter(r=>models.every(m=>m.has(r)));
+  let X=models.map(m=>resis.map(r=>m.get(r))), use=resis.map((_,i)=>i), rmsf=null;
+  for(let pass=0;pass<2;pass++){                      // fit on every C-alpha, then on the steadier half
+    const ref=use.map(i=>X[0][i]);
+    X=X.map(pts=>{ const T=fitTransform(use.map(i=>pts[i]), ref); return pts.map(T); });
+    rmsf=resis.map((_,i)=>{ const m=[0,0,0]; for(const pts of X) for(let k=0;k<3;k++) m[k]+=pts[i][k]/X.length;
+      let ss=0; for(const pts of X) ss+=(pts[i][0]-m[0])**2+(pts[i][1]-m[1])**2+(pts[i][2]-m[2])**2;
+      return Math.sqrt(ss/X.length); });
+    use=resis.map((_,i)=>i).sort((a,b)=>rmsf[a]-rmsf[b]).slice(0, Math.max(3, Math.floor(resis.length/2)));
+  }
+  const spread={}; resis.forEach((r,i)=>spread[r]=rmsf[i]);
+  return {models: models.length, spread};
+}
+
 // live SS (Cα proxy for DSSP) + rough domain split, so colouring modes have data
 function computeMaps(caOrder){
   const n=caOrder.length, ss=new Array(n).fill('C');
@@ -744,6 +815,8 @@ loadPDB().then(pdb=>{
   // A file whose B column is all zero carries no confidence at all (not an AlphaFold model):
   // treat every residue as confident rather than drawing the whole thing as ghost.
   if(atoms.every(a=>!a.b)) for(const r in res2plddt) res2plddt[r]=100;
+  if(nModels>1){ ENSEMBLE=ensembleSpread(pdb);
+    if(ENSEMBLE) for(const r in res2plddt) if(r in ENSEMBLE.spread) res2plddt[r]=spreadToConf(ENSEMBLE.spread[r]); }
   // frequency order, so the legend reads carbon → nitrogen → oxygen → sulfur for a protein
   elemsPresent=[...elemCount.entries()].sort((p,q)=>q[1]-p[1]).map(e=>e[0]);
   if(!caOrder.length){ window.__err('no Cα atoms parsed'); return; }
