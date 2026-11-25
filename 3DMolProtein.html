@@ -100,9 +100,6 @@
   #ctrls .box { display: flex; align-items: center; gap: 9px; padding: 6px 12px; color: #aab6c4; }
   #ctrls input[type=range] { width: 112px; background: transparent; accent-color: var(--amber); cursor: default; }
   #ctrls #spdVal, #ctrls #confRVal { min-width: 30px; text-align: right; color: var(--amber); font-variant-numeric: tabular-nums; }
-  #ctrls #modeBox .sw { display: flex; padding: 2px; border-radius: 7px; background: rgba(255, 255, 255, .08); }
-  #ctrls #modeBox .sw button { padding: 3px 9px; border: 0; border-radius: 5px; background: none; color: #aab6c4; font: inherit; cursor: default; }
-  #ctrls #modeBox .sw button.on { background: var(--amber); color: #0a0e13; font-weight: 700; }
   #ctrls > button { padding: 6px 12px; cursor: default; }
   #ctrls > button:hover, #ctrls select:hover { box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .42), 0 4px 14px rgba(0, 0, 0, .25); }
   #legend { display: none; max-width: 230px; padding: 9px 12px; font-size: 11px; color: #aab6c4; }
@@ -141,9 +138,7 @@
   #ctrls select { background-image: var(--fv-arrow, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23c9d3df' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E")); }
   #ctrls > button:hover, #ctrls select:hover { background-color: var(--lg-frost-hover); }
   #ctrls select option { background: var(--fv-option, #1c1e24); color: var(--fv-ink, #e6ebf2); }
-  #ctrls .box, #legend, #dash, #ctrls #modeBox .sw button { color: var(--fv-ink-2, #aab6c4); }
-  #ctrls #modeBox .sw { background: var(--fv-sw, rgba(255, 255, 255, .08)); }
-  #ctrls #modeBox .sw button.on { color: #0a0e13; }
+  #ctrls .box, #legend, #dash { color: var(--fv-ink-2, #aab6c4); }
   #ctrls #spdVal, #ctrls #confRVal, #dash .row b { color: var(--fv-amber, var(--amber)); }
   #dash .row .u, #dash .k { color: var(--fv-ink-3, #6f8296); }
 </style>
@@ -232,8 +227,6 @@
   </select>
   <div class="box"><span>speed</span><input id="spd" type="range" min="0.25" max="3" step="0.05" value="1"><span id="spdVal">1.0×</span></div>
   <div class="box" id="confBox" style="display:none" title="How large to draw each uncertain atom's probability ball"><span>confidence radius</span><input id="confR" type="range" min="0" max="2.5" step="0.05" value="1"><span id="confRVal">1.0×</span></div>
-  <div class="box" id="modeBox" style="display:none" title="How each frame reaches the screen. Flipping restarts the animation from a fresh build."><span>path</span>
-    <span class="sw"><button id="modeFast" class="on">fast path</button><button id="modeRebuild">rebuild every frame</button></span></div>
   <button id="replay" title="Re-run the current view's animation">↻ replay</button>
   
   <div id="legend"></div>
@@ -749,7 +742,6 @@ function showTab(which){
   document.getElementById('wobble').style.display=wobble?'block':'none';
   document.getElementById('ctrls').style.display='flex';
   document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
-  document.getElementById('modeBox').style.display=wobble?'flex':'none';
   document.getElementById('dash').style.display=wobble?'block':'none';
   document.getElementById('seqbar').style.display=asm?'block':'none';
 
@@ -794,17 +786,9 @@ confR.oninput=()=>{ cloudK=parseFloat(confR.value); confRVal.textContent=cloudK.
 confR.onchange=()=>{ if(curTab==='wobble') wobbleRebuild=true; };
 confR.oninput();
 
-// Path switch: fast path (replay in place) or rebuild every frame (the existing path). Flipping
-// it restarts the animation COLD -- geometry built from scratch at frame 0, dashboard cleared --
-// so nothing from the other path is carried over, and a cold start can be watched on demand.
-const modeFast=document.getElementById('modeFast'), modeRebuild=document.getElementById('modeRebuild');
-function setPath(m){
-  if(m===wobbleMode) return;
-  wobbleMode=m;
-  modeFast.classList.toggle('on', m==='replay'); modeRebuild.classList.toggle('on', m==='rebuild');
-  if(curTab==='wobble') runWobble(false);
-}
-modeFast.onclick=()=>setPath('replay'); modeRebuild.onclick=()=>setPath('rebuild');
+// The Wobble tab always takes the fast path (replay in place). The picker that could switch it to
+// rebuild-every-frame was a diagnostic for 3Dmol.js PR #859 and was removed 2026-11-24; foldbench.html
+// still compares the two paths.
 
 const cmodeSel=document.getElementById('cmode');
 cmodeSel.onchange=()=>{ colorMode=cmodeSel.value; replayCurrent(); updateLegend(); };
