@@ -19,9 +19,6 @@
               zero radius to full, centre-outward. Opacity was the wrong channel for an entrance
               -- it already means confidence, so fading it made every atom misreport itself
               until the animation ended. Radius was free, and it is the cheaper channel too.
-    Assemble  was the starfield's uReveal uniform walking N->C. Now the same grow engine as the
-              Protein entrance, ordered by sequence position instead of radius, with the
-              sequence cursor tracking the sweep.
     Fold      was three.js foldTo(): a per-instance 4x4 matrix per atom into an InstancedMesh.
               Now lerps the atom coordinates and calls GLModel.syncAtomPositions(), which
               rewrites the imposter vertices in place -- 12 floats per atom and one
@@ -60,11 +57,11 @@
   /* the sidebar: the story of the view you're in */
   #left { flex: none; display: flex; flex-direction: column; width: 340px; min-height: 0; }
   .fv-side-top { flex: none; }
-  #explore, #asm, #fold, #atoms, #wobble { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 18px 18px 14px; user-select: text; }
-  #explore h1, #asm h1, #fold h1, #atoms h1, #wobble h1 { margin: 6px 0 10px; font-size: 18px; font-weight: 700; color: var(--lg-text); }
-  #explore p, #asm p, #fold p, #atoms p, #wobble p { margin: 0 0 11px; font-size: 13px; line-height: 1.6; color: var(--lg-text-2); }
-  #explore p b, #asm p b, #fold p b, #atoms p b, #wobble p b { color: var(--lg-text); }
-  #explore .tag, #asm .tag, #fold .tag, #atoms .tag, #wobble .tag { display: inline-block; padding: 3px 9px; border-radius: 999px;
+  #explore, #fold, #atoms, #wobble { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 18px 18px 14px; user-select: text; }
+  #explore h1, #fold h1, #atoms h1, #wobble h1 { margin: 6px 0 10px; font-size: 18px; font-weight: 700; color: var(--lg-text); }
+  #explore p, #fold p, #atoms p, #wobble p { margin: 0 0 11px; font-size: 13px; line-height: 1.6; color: var(--lg-text-2); }
+  #explore p b, #fold p b, #atoms p b, #wobble p b { color: var(--lg-text); }
+  #explore .tag, #fold .tag, #atoms .tag, #wobble .tag { display: inline-block; padding: 3px 9px; border-radius: 999px;
     background: var(--lg-control); box-shadow: inset 0 0 0 .5px rgba(128, 128, 128, .3); font-size: 11px; color: var(--lg-text-2); }
 
   /* the toolbar: back to the library, the protein, the five views */
@@ -81,10 +78,6 @@
   #scene { position: absolute; inset: 0; }
   #mol { position: absolute; inset: 0; }
   #mol canvas { outline: none; }
-  #seqbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; display: none; max-height: 30%; overflow: auto; padding: 8px 14px;
-    background: rgba(8, 11, 16, .92); border-top: .5px solid rgba(255, 255, 255, .12);
-    font: 11px/1.7 "SF Mono", Menlo, Consolas, monospace; letter-spacing: 2px; color: #8aa0b8; word-break: break-all; }
-  #seqbar span.cur { padding: 0 1px; border-radius: 2px; background: var(--amber); color: #0a0e13; font-weight: 700; }
 
   /* the controls: glass chips over the scene */
   #ctrls { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
@@ -122,7 +115,6 @@
     }
   }
   .fv-stage { background: var(--fv-stage, rgba(8, 11, 16, .84)); box-shadow: inset 0 0 0 .5px var(--fv-stage-rim, rgba(255, 255, 255, .12)); }
-  #seqbar { background: var(--fv-bar, rgba(8, 11, 16, .78)); color: var(--fv-ink-2, #8aa0b8); border-top-color: var(--fv-chip-rim, rgba(255, 255, 255, .12)); }
   /* THE CHIPS OVER THE SCENE WEAR THE SIDEBAR'S GLASS (Jay, 2026-10-24: every tile the left panel's frost, glass.css) */
   #ctrls select, #ctrls .box, #ctrls > button, #legend { background-color: var(--lg-frost); color: var(--fv-ink, #e6ebf2);
     box-shadow: var(--lg-frost-rims); }
@@ -159,12 +151,6 @@
     finishes before the surface reaches full size.</p>
     <span class="tag">drag · scroll · recolour</span>
   </div>
-  <div id="asm">
-    <h1>Read into existence</h1>
-    <p>The raw input is the one-letter sequence printed across the top — all <b id="asmN">…</b> amino acids, N-terminus to C-terminus. A cursor parses it left to right, and the structure grows in 3-D, residue by residue, along the native fold.</p>
-    <p>Step 1 made literal: a bare string of letters becoming a folded protein, one parsed residue at a time.</p>
-    <span class="tag">input sequence · parsed into the fold</span>
-  </div>
   <div id="fold">
     <h1>Fold</h1>
     <p>The idealized unfolded chain collapsing into its native structure — the “possible initial” folding into the verified fold, every atom travelling to its place at once.</p>
@@ -198,7 +184,6 @@
     <span class="lg-spacer"></span>
     <div id="tabs">
       <button id="tabExplore" class="on">Protein</button>
-      <button id="tabAsm">Assemble</button>
       <button id="tabFold">Fold</button>
       <button id="tabWobble">Wobble</button>
       <button id="tabAtoms">Atoms</button>
@@ -206,7 +191,6 @@
   </div>
   <div class="fv-stage lg-float">
 <div id="scene"><div id="mol"></div></div>
-<div id="seqbar"></div>
 <div id="ctrls">
   <select id="cmode" title="Colour scheme — every option is a standard protein-rendering convention">
     <option value="ss">Colour: secondary structure</option>
@@ -414,22 +398,6 @@ function runSphereReveal(sec){
   runGrow(a=>(dist.get(a.resi)||0)/dmax, sec||2.6, null, 'explore');
 }
 
-// ═══════════════════ Assemble — sequence sweep N→C ═══════════════════
-const ASM_SECONDS=6;
-let seqbarEl=null, hiIdx=-1, buildF=0;
-function updateCursor(){ if(!seqbarEl) return; const hi=Math.min(N,Math.floor(buildF)); if(hi===hiIdx) return;
-  const sp=seqbarEl.children;
-  if(hiIdx>=1 && sp[hiIdx-1]) sp[hiIdx-1].className='';
-  if(hi>=1 && sp[hi-1]) sp[hi-1].className='cur';
-  hiIdx=hi; }
-function resetCursor(){ buildF=0; hiIdx=-1; if(seqbarEl) for(const s of seqbarEl.children) s.className=''; }
-// Same engine, ordered along the chain instead of outward, with the sequence cursor tracking the
-// sweep so the letter being read and the atoms appearing stay in step.
-function runAssemble(){
-  resetCursor();
-  runGrow(a=>(res2order[a.resi]||0)/Math.max(1,N-1), ASM_SECONDS,
-    sweep=>{ buildF=Math.min(N, sweep*Math.max(1,N-1)); updateCursor(); }, 'asm');
-}
 
 // ═══════════════════ Fold — coil → native morph ═══════════════════
 // Per-atom unfolded endpoint: a smoothed random-walk backbone (the same walk buildCoilPDB uses),
@@ -661,21 +629,19 @@ function updateLegend(){ const el=document.getElementById('legend'); let items=n
   el.style.display='block';
 }
 
-const tabExplore=document.getElementById('tabExplore'), tabAsm=document.getElementById('tabAsm'),
+const tabExplore=document.getElementById('tabExplore'),
       tabFold=document.getElementById('tabFold'), tabAtoms=document.getElementById('tabAtoms'),
       tabWobble=document.getElementById('tabWobble');
 function showTab(which){
-  const explore=which==='explore', asm=which==='asm', fold=which==='fold', atomsTab=which==='atoms', wobble=which==='wobble';
-  tabExplore.classList.toggle('on',explore); tabAsm.classList.toggle('on',asm);
+  const explore=which==='explore', fold=which==='fold', atomsTab=which==='atoms', wobble=which==='wobble';
+  tabExplore.classList.toggle('on',explore);
   tabFold.classList.toggle('on',fold); tabAtoms.classList.toggle('on',atomsTab); tabWobble.classList.toggle('on',wobble);
   document.getElementById('explore').style.display=explore?'block':'none';
-  document.getElementById('asm').style.display=asm?'block':'none';
   document.getElementById('fold').style.display=fold?'block':'none';
   document.getElementById('atoms').style.display=atomsTab?'block':'none';
   document.getElementById('wobble').style.display=wobble?'block':'none';
   document.getElementById('ctrls').style.display='flex';
   document.getElementById('confBox').style.display=(wobble && TRAJ<=1)?'flex':'none';
-  document.getElementById('seqbar').style.display=asm?'block':'none';
 
   const leavingFold = curTab==='fold' && !fold;
   const leavingWobble = curTab==='wobble' && !wobble;
@@ -686,12 +652,11 @@ function showTab(which){
 
   if(fold){ runFold(); }
   else if(wobble){ runWobble(false); }
-  else if(asm){ viewer.zoomTo(); runAssemble(); }
   else if(atomsTab){ viewer.zoomTo(); styleAtomCloud(); }
   else { viewer.zoomTo(); runSphereReveal(); }
   updateLegend();
 }
-tabExplore.onclick=()=>showTab('explore'); tabAsm.onclick=()=>showTab('asm');
+tabExplore.onclick=()=>showTab('explore');
 tabFold.onclick=()=>showTab('fold'); tabAtoms.onclick=()=>showTab('atoms');
 tabWobble.onclick=()=>showTab('wobble');
 
@@ -700,7 +665,6 @@ function replayCurrent(){
   if(!viewer||!M) return;
   if(curTab==='fold') runFold();
   else if(curTab==='wobble') runWobble(true);   // re-roll the phases
-  else if(curTab==='asm') runAssemble();
   else if(curTab==='atoms') styleAtomCloud();   // static view: just restyle
   else runSphereReveal();
 }
@@ -787,9 +751,6 @@ loadPDB().then(pdb=>{
   computeMaps(caOrder);
   caOrder.forEach((a,i)=>res2order[a.resi]=i);
 
-  seqbarEl=document.getElementById('seqbar');
-  seqbarEl.innerHTML=caOrder.map(a=>'<span>'+(res2code[a.resi]||'X')+'</span>').join('');
-  document.getElementById('asmN').textContent=N;
 
   viewer.setViewStyle({style:'outline', color:'black', width:0.05});
   styleSpheres(true);
@@ -800,7 +761,7 @@ loadPDB().then(pdb=>{
 
   updateLegend();
   const tb=P.get('tab');
-  showTab((tb==='asm'||tb==='fold'||tb==='atoms'||tb==='wobble') ? tb : 'explore');
+  showTab((tb==='fold'||tb==='atoms'||tb==='wobble') ? tb : 'explore');
 
 }).catch(e=>window.__err('load failed: '+e));
 </script>
